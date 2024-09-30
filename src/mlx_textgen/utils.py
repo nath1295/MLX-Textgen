@@ -304,8 +304,9 @@ def stream_generate(
     tokens = tokenizer.encode(prompt)
     # remove duplicated bos tokens
     if len(tokens) > 1:
-        if ((tokens[0] == tokenizer.bos_token_id) and (tokens[0] == tokenizer.bos_token_id)):
-            tokens = tokens[1:]
+         if tokens[0] == tokenizer.bos_token_id:
+            while tokens[1] == tokenizer.bos_token_id:
+                tokens = tokens[:1] + tokens[2:]
     prompt_tokens = mx.array(tokens)
     detokenizer = tokenizer.detokenizer
 
@@ -372,8 +373,9 @@ def generate(
     tokens = tokenizer.encode(prompt)
     # remove duplicated bos tokens
     if len(tokens) > 1:
-        if ((tokens[0] == tokenizer.bos_token_id) and (tokens[0] == tokenizer.bos_token_id)):
-            tokens = tokens[1:]
+         if tokens[0] == tokenizer.bos_token_id:
+            while tokens[1] == tokenizer.bos_token_id:
+                tokens = tokens[:1] + tokens[2:]
     prompt_tokens = mx.array(tokens)
     detokenizer = tokenizer.detokenizer
 
