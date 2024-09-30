@@ -1,0 +1,42 @@
+[project]
+name = "mlx-textgen"
+description = "A python package for serving LLM on OpenAI-compatible API endpoints with prompt caching using MLX."
+dynamic = ["version"]
+
+authors = [
+    {name = "Nathan Tam", email = "nathan1295@gmail.com"},
+]
+requires-python = ">=3.9"
+readme = "README.md"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+]
+dependencies = [
+    "mlx-lm>=0.18.2",
+    "orjson",
+    "fastapi",
+    "uvicorn"
+]
+
+[project.urls]
+Homepage = "https://github.com/nath1295/MLX-Textgen"
+
+[project.scripts]
+"mlx_textgen.server" = "mlx_textgen.server:main"
+"mlx_textgen.create_config" = "mlx_textgen.create_config:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.dynamic]
+version = {attr = "mlx_textgen.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
