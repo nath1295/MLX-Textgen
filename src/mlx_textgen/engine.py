@@ -276,6 +276,3 @@ class ModelEngine:
             del cache
             mx.metal.clear_cache()
             return enforce_stop_tokens(output, stop=[] if stop is None else stop)
-
-
-        

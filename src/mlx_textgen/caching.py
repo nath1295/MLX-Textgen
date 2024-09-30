@@ -187,17 +187,3 @@ class CacheManager:
         if self.logger is not None:
             self.logger.info(f'New cache history "{new_id}" saved. Number of tokens: {new_len}.')
         return
-                
-
-
-                    
-
-                    
-
-
-
-
-
-
-
-
