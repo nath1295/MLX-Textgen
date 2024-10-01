@@ -3,7 +3,7 @@ from mlx_lm.tokenizer_utils import load_tokenizer
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx.nn import Module
 import mlx.core as mx
-from .utils import mlx_cache_dir, generate, stream_generate, textgen_iterator, enforce_stop_tokens
+from .utils import mlx_cache_dir, generate, stream_generate, remove_bos_duplicates, FINISH_REASON
 from .caching import CacheManager
 from pathlib import Path
 from logging import Logger
@@ -111,6 +111,13 @@ def get_model_and_tokenizer(
     tokenizer = load_tokenizer(model_path=mlx_path if tokenizer_id_or_path is None else Path(tokenizer_id_or_path), tokenizer_config_extra=tokenizer_config)
     return model, tokenizer
 
+class EngineOutput(NamedTuple):
+    text: str
+    token: int
+    token_ids: List[int]
+    logprobs: mx.array
+    prompt_len: int
+    finish_reason: FINISH_REASON
 
 class ModelEngine:
 
@@ -206,8 +213,9 @@ class ModelEngine:
             min_tokens_to_keep: int = 1,
             logit_bias: Optional[Dict[int, float]] = None,
             prefill_step_size: Optional[int] = None,
+            seed: Optional[int] = None,
             **kwargs
-        ) -> Union[str, Iterator[str]]:
+        ) -> Union[EngineOutput, Iterator[EngineOutput]]:
         """Generate text with a model.
 
         Args:
@@ -233,6 +241,7 @@ class ModelEngine:
         """
         self._switch_model(model_name=model_name)
         prompt_tokens = self.tokenizer.encode(prompt)
+        prompt_tokens = remove_bos_duplicates(prompt_tokens, self.tokenizer.bos_token_id)
         cache, cache_id = self.cache_manager.find_cache(token_ids=prompt_tokens)
         gen_kwargs = dict(
             max_tokens=max_new_tokens,
@@ -246,33 +255,51 @@ class ModelEngine:
             logit_bias=logit_bias,
             prefill_step_size=self.prefill_step_size if prefill_step_size is None else prefill_step_size,
             cache_history=cache,
+            seed=seed,
             verbose=True
         )
         if stream:
             def stream_output():
                 nonlocal cache
-                for text, cache in stream_generate(
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    prompt=prompt,
-                    return_cache=True,
-                    **gen_kwargs
-                ):
-                    yield text
-                self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
-                del cache
-                mx.metal.clear_cache()
-                yield ''
-            return textgen_iterator(text_generator=stream_output(), stop=[] if stop is None else stop)
+                try:
+                    for output in stream_generate(
+                        model=self.model,
+                        tokenizer=self.tokenizer,
+                        prompt=prompt,
+                        **gen_kwargs
+                    ):
+                        cache = output.step
+                        yield EngineOutput(
+                            text=output.text,
+                            token=output.step.token,
+                            token_ids=output.step.token_ids,
+                            logprobs=output.step.logprobs,
+                            prompt_len=output.prompt_len,
+                            finish_reason=output.finish_reason
+                        )
+                finally:
+                    self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
+                    del cache, output
+                    mx.metal.clear_cache()
+
+            return stream_output()
         else:
-            output, cache = generate(
+            output = generate(
                 model=self.model,
                 tokenizer=self.tokenizer,
                 prompt=prompt,
-                return_cache=True,
                 **gen_kwargs
             )
+            cache = output.step
+            engine_output = EngineOutput(
+                    text=output.text,
+                    token=output.step.token,
+                    token_ids=output.step.token_ids,
+                    logprobs=output.step.logprobs,
+                    prompt_len=output.prompt_len,
+                    finish_reason=output.finish_reason
+                )
             self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
-            del cache
+            del cache, output
             mx.metal.clear_cache()
-            return enforce_stop_tokens(output, stop=[] if stop is None else stop)
+            return engine_output

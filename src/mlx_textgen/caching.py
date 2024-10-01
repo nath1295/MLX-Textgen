@@ -67,6 +67,10 @@ class CacheManager:
                 return f'cache_{i}'
         return f'cache_{max_id + 1}'
     
+    def _log_info(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.info(message)
+    
     def drop_cache(self, cache_id: str) -> None:
         """Drop an existing cache history.
 
@@ -79,8 +83,7 @@ class CacheManager:
             cache_file = os.path.join(self.cache_dir, f'{cache_id}.safetensors')
             if os.path.exists(cache_file):
                 os.remove(cache_file)
-                if self.logger is not None:
-                    self.logger.info(f'Cache history "{cache_id}" dropped. Number of tokens: {ps.length}.')
+                self._log_info(f'Cache history "{cache_id}" dropped. Number of tokens: {ps.length}.')
         for k, v in cached_prompts.items():
             cached_prompts[k] = prompt_summary_to_dict(v)
         with open(self.json_dir, 'w') as f:
@@ -96,13 +99,16 @@ class CacheManager:
         Returns:
             Tuple[Optional[CacheHistory], Optional[str]]: The cache history and it's cache ID.
         """
+        self._log_info(f'Number of tokens for prompt: {len(token_ids)}')
         cached_prompts = list(self.cached_prompts.items())
         if len(cached_prompts) == 0:
+            self._log_info('No existing cache.')
             return None, None
         token_threshold = self.token_threshold if token_threshold is None else token_threshold
         cached_prompts = [(x, find_max_prefix_num(new=token_ids, baseline=x[1].token_ids)) for x in cached_prompts]
         cached_prompts = list(filter(lambda x: x[1] >= token_threshold, cached_prompts))
         if len(cached_prompts) == 0:
+            self._log_info(f'No cache with prefix match tokens larger than {token_threshold}.')
             return None, None
         cached_prompts.sort(key=lambda x: x[1], reverse=True)
         if cached_prompts[0][1] == 0:
@@ -111,7 +117,7 @@ class CacheManager:
         cache_file = os.path.join(self.cache_dir, f'{key}.safetensors')
         cache_history, metadata = load_cache(cache_file)
         self.update_cache_time(cache_id=key)
-        self.logger.info(f'Cache history "{key}" with {cached_prompts[0][0][1].length} tokens is selected.')
+        self._log_info(f'Cache history "{key}" with {cached_prompts[0][0][1].length} tokens is selected.')
         return cache_history, key
     
     def update_cache_time(self, cache_id: str) -> None:
@@ -184,6 +190,5 @@ class CacheManager:
             cached_prompts[k] = prompt_summary_to_dict(v)
         with open(self.json_dir, 'w') as f:
             json.dump(cached_prompts, f, indent=4)
-        if self.logger is not None:
-            self.logger.info(f'New cache history "{new_id}" saved. Number of tokens: {new_len}.')
+        self._log_info(f'New cache history "{new_id}" saved. Number of tokens: {new_len}.')
         return

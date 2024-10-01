@@ -1,9 +1,11 @@
 import uvicorn
+import mlx.core as mx
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from .engine import ModelEngine, ModelConfig
-from .utils import PACKAGE_NAME
+from .utils import PACKAGE_NAME, FINISH_REASON
+from datetime import datetime as dt
 import asyncio
 import argparse
 import logging, json, uuid, warnings, yaml
@@ -77,7 +79,7 @@ def parse_args() -> Tuple[ModelEngine, int, List[str]]:
 
 engine, port, api_keys = parse_args()
 
-models = [dict(id=m, object='model', created=1, owned_by='null', permission=[], root='root') for m in engine.models.keys()]
+models = [dict(id=m, object='model', created=int(dt.now().timestamp()), owned_by='null', permission=[], root='root') for m in engine.models.keys()]
 app = FastAPI()
 semaphore = asyncio.Semaphore(1)
 
@@ -85,41 +87,58 @@ semaphore = asyncio.Semaphore(1)
 async def get_models() -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(dict(object='list', data=models)))
 
-def get_return_dict(text: Union[str, List[str]], id: str, model: str, return_type: Literal['text_completion', 'chat.completion'], stream: bool) -> Dict[str, Any]:
+def get_return_dict(
+        text: Union[str, List[str]], 
+        id: str, model: str, 
+        return_type: Literal['text_completion', 'chat.completion'], 
+        finish_reason: FINISH_REASON,
+        created: float,
+        stream: bool,
+        prompt_tokens: int = 100,
+        total_tokens: int = 200,
+        logprob_dict: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
     if return_type == 'text_completion':
-        choices = [dict(index=0, finish_reason='null', text=t) for t in text] if isinstance(text, list) else [dict(index=0, finish_reason='null', text=text)]
-        return dict(id=id, 
+        choices = [dict(index=0, finish_reason=finish_reason, text=t) for t in text] if isinstance(text, list) else [dict(index=0, finish_reason=finish_reason, text=text, logprobs=logprob_dict)]
+        return dict(id='cmpl-'+id, 
             object=return_type, 
-            created=1,
+            created=created,
             model=model, 
-            choices=choices
+            choices=choices,
+            usage=dict(
+                prompt_tokens=prompt_tokens, 
+                completion_tokens=total_tokens - prompt_tokens, 
+                total_tokens=total_tokens
+            )
         )
     elif ((return_type == 'chat.completion') and (stream)):
         return dict(
-            id="id", 
+            id='chatcmpl-'+id, 
             object=return_type + '.chunk', 
-            created=1, 
+            created=created, 
             model=model, 
             choices=[
                 dict(
                     index=0, 
-                    finish_reason="null", 
+                    finish_reason=finish_reason, 
                     delta=dict(
                         role="assistant",
-                        content=text)
+                        content=text
+                    ),
+                    logprobs=logprob_dict
                 )
             ]
         )
     elif return_type == 'chat.completion':
         return dict(
-            id=id, 
+            id='chatcmpl-'+id, 
             object=return_type, 
-            created=1, 
+            created=created, 
             model=model, 
             usage=dict(
-                prompt_tokens=100, 
-                completion_tokens=100, 
-                total_tokens=200
+                prompt_tokens=prompt_tokens, 
+                completion_tokens=total_tokens - prompt_tokens, 
+                total_tokens=total_tokens
             ), 
             choices=[
                 dict(
@@ -129,13 +148,18 @@ def get_return_dict(text: Union[str, List[str]], id: str, model: str, return_typ
                         content=text[0], 
                         tool_calls=[]
                     ), 
-                    finish_reason="length"
+                    logprobs=logprob_dict,
+                    finish_reason=finish_reason
                 )
             ]
         )
     
-
-
+def create_logprobs(token: int, logprobs: mx.array, top: int) -> Tuple[float, Dict[int, float]]:
+    sorted_indices = mx.argpartition(-logprobs, kth=top - 1)
+    top_indices = sorted_indices[: top]
+    top_logprobs = logprobs[top_indices]
+    top_token_info = zip(top_indices.tolist(), top_logprobs.tolist())
+    return logprobs[token].item(), dict(top_token_info)
 
 # Generation
 def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
@@ -148,12 +172,40 @@ def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
         max_new_tokens=args.get('max_tokens', 1024),
         temperature=args.get('temperature', 0.0),
         top_p=args.get('top_p', 1),
-        repetition_penalty=args.get('repetition_penalty', None),
+        repetition_penalty=args.get('frequency_penalty', None),
+        seed=args.get('seed'),
         stream=True,
         **extra_body
     )
+    created = int(dt.now().timestamp())
+    logprobs = args.get('logprobs', False)
+    top_logprobs = args.get('top_logprobs', 3)
+    token_count = 0
     for i in response:
-        return_dict = get_return_dict(text=i, id=id, model=args['model'], return_type=args['endpoint'], stream=True)
+        token_count += 1
+        if logprobs:
+            token_prob, top_dict = create_logprobs(i.token, i.logprobs, top_logprobs)
+            logprobs_dict = dict(
+                content=[
+                        dict(
+                            token=engine.tokenizer.decode(i.token),
+                            logprob=token_prob,
+                            top_logprobs=[
+                                dict(
+                                    token=engine.tokenizer.decode(k),
+                                    logprob=v
+                                )
+                                for k, v in top_dict.items()
+                            ]
+                        )
+                    ]
+                )
+        else:
+            logprobs_dict = None
+        return_dict = get_return_dict(text=i.text, id=id, 
+            model=args['model'], return_type=args['endpoint'], 
+            stream=True, finish_reason=i.finish_reason, created=created, prompt_tokens=i.prompt_len, total_tokens=token_count + i.prompt_len,
+            logprob_dict=logprobs_dict)
         yield f'data: {json.dumps(return_dict)}\n\n'
     yield 'data: [DONE]'
 
@@ -161,6 +213,7 @@ def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
 def static_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     extra_body = args.get('extra_body', dict())
     id = uuid.uuid4().hex
+    created = int(dt.now().timestamp())
     if isinstance(args['prompt'], str):
         response = engine.generate(
             model_name=args['model'],
@@ -170,12 +223,13 @@ def static_generate(args: Dict[str, Any]) -> Dict[str, Any]:
             temperature=args.get('temperature', 0.0),
             top_p=args.get('top_p', 1),
             repetition_penalty=args.get('frequency_penalty', None),
+            seed=args.get('seed'),
             stream=False,
             **extra_body
         )
-        texts = [response]
+        outputs = [response]
     else:
-        texts = []
+        outputs = []
         for prompt in args['prompt']:
             response = engine.generate(
                 model_name=args['model'],
@@ -188,8 +242,12 @@ def static_generate(args: Dict[str, Any]) -> Dict[str, Any]:
                 stream=False,
                 **extra_body
             )
-            texts.append(response)
-    return_dict = get_return_dict(text=texts, id=id, model=args['model'], return_type=args['endpoint'], stream=False)
+            outputs.append(response)
+    texts = list(map(lambda x: x.text, outputs))
+    prompt_len = sum(list(map(lambda x: x.prompt_len, outputs)))
+    total_tokens = sum(list(map(lambda x: len(x.token_ids), outputs)))
+    return_dict = get_return_dict(text=texts, id=id, model=args['model'], return_type=args['endpoint'], 
+            stream=False, created=created, finish_reason=outputs[-1].finish_reason, prompt_tokens=prompt_len, total_tokens=total_tokens)
     return return_dict
     
 async def async_generate_stream(args: Dict[str, Any]):

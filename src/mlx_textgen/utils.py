@@ -6,10 +6,12 @@ import mlx.core as mx
 import mlx.nn as nn
 import time, os
 from transformers import PreTrainedTokenizer
-from typing import Union, Optional, List, Tuple, Dict, Generator, NamedTuple, Callable, Iterator
+from typing import Union, Optional, List, Tuple, Dict, Generator, NamedTuple, Callable, Iterator, Literal
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 
-PACKAGE_NAME=  'mlx_textgen'
+PACKAGE_NAME = 'mlx_textgen'
+
+FINISH_REASON = Optional[Literal['stop', 'length']]
 
 def mlx_cache_dir() -> str:
     home_dir = os.path.expanduser('~')
@@ -26,6 +28,16 @@ class StepOutput(NamedTuple):
 class CacheHistory(NamedTuple):
     cache: List[Tuple[mx.array, mx.array]]
     token_ids: List[int]
+
+class GenerateOutput(NamedTuple):
+    text: str
+    step: StepOutput
+    finish_reason: FINISH_REASON
+    prompt_len: int
+
+class StopCondition(NamedTuple):
+    stop_met: bool
+    trim_length: int
 
 def convert_cache_to_history(cache: StepOutput) -> CacheHistory:
     """Helper function to convert the output of "generate_step" into reusable cache history.
@@ -80,6 +92,21 @@ def load_cache(filename: str) -> Tuple[CacheHistory, Dict[str, str]]:
     mx.metal.clear_cache()
     return ch, metadata
 
+def remove_bos_duplicates(token_ids: List[int], bos_token_id: Optional[int]) -> List[int]:
+    """Remove duplicates of bos tokens if there are multiple of them in the token id list. This usually happen when the prompt was already formatted by the tokenizer.
+
+    Args:
+        token_ids (List[int]): List of token ids.
+        bos_token_id (Optional[int]): BOS token id.
+
+    Returns:
+        List[int]: List of token ids without bos token duplicates.
+    """
+    if ((len(token_ids) > 1) and (token_ids[0] == bos_token_id)):
+        while token_ids[1] == bos_token_id:
+            token_ids = token_ids[:1] + token_ids[2:]
+    return token_ids
+
 def find_max_prefix_num(new: List[int], baseline: List[int]) -> int:
     """Helper function to find the maximum number of tokens shared in the prefix of two prompts.
 
@@ -92,6 +119,42 @@ def find_max_prefix_num(new: List[int], baseline: List[int]) -> int:
     """
     from itertools import takewhile
     return len(list(takewhile(lambda x: x[0] == x[1], zip(new, baseline))))
+
+def stopping_criteria(
+        text: str,
+        stop_tuple: List[Tuple[str, int]],
+        eos_tuple: Union[Tuple[str, int], None],
+    ) -> StopCondition:
+    """Get the stopping condition with stop words and eos token.
+
+    Args:
+        text (str): Text to be determined to stop or not.
+        stop_tuple (List[Tuple[str, int]]): List of tuple with the stop word string and the length of the string. Must be ordered descendingly by length.
+        eos_tuple (Union[Tuple[str, int], None]): Eos token string and it's length.
+
+    Returns:
+        StopCondition: A status class stating whether the generation should stop and the length of text to trim.
+    """
+    if eos_tuple is not None and eos_tuple[0] in text:
+        return StopCondition(stop_met=True, trim_length=len(text.split(eos_tuple)[-1]) + eos_tuple[1])
+
+    return next(
+        (StopCondition(stop_met=True, trim_length=length + len(text.split(stop)[-1]))
+        for stop, length in stop_tuple if stop in text), StopCondition(stop_met=False, trim_length=0)
+    )
+
+def sequence_overlap(s1: str, s2: str) -> bool:
+    """Determine if there is overlapping string between the suffix of the first string and the prefix of the second string.
+
+    Args:
+        s1 (str): First string.
+        s2 (str): Second string.
+
+    Returns:
+        bool: Whether there is overlap.
+    """
+    max_overlap = min(len(s1), len(s2))
+    return any(s1[-i:] == s2[:i] for i in range(1, max_overlap + 1))
 
 def get_kv_caches(
         model: nn.Module, 
@@ -140,6 +203,7 @@ def generate_step(
     top_p: float = 1.0,
     min_p: float = 0.0,
     min_tokens_to_keep: int = 1,
+    seed: Optional[int] = None,
     logit_bias: Optional[Dict[int, float]] = None,
     prefill_step_size: int = 512,
     verbose: bool = False,
@@ -164,8 +228,10 @@ def generate_step(
           probability) that a token probability must have to be considered.
         min_tokens_to_keep (int, optional): Minimum number of tokens that cannot
           be filtered by min_p sampling.
+        seed (Optional[int], optional): Random seed for sampling. Defaults to None.
         logit_bias (dictionary, optional): Additive logit bias.
-        prefill_step_size (int): Step size for processing the prompt.
+        prefill_step_size (int, optional): Step size for processing the prompt. Defaults to 512.
+        verbose (bool, optional): 
         max_kv_size (int, optional): Maximum size of the key-value cache. Old
           entries (except the first 4 tokens) will be overwritten.
         cache_history (Optional[Union[CacheHistory, StepOutput]], optional): Reusable prompt cache history or previous generation step output. Defaults to None.
@@ -202,6 +268,9 @@ def generate_step(
     tokens: List[int] = prompt.tolist()
     token_count = len(tokens)
     y = prompt
+
+    if seed:
+        mx.random.seed(seed)
 
     # Create the KV cache for generation and get the number of tokens being reused.
     cache, max_prefix = get_kv_caches(model=model, promp_tokens=tokens, max_kv_size=max_kv_size, cache_history=cache_history)
@@ -273,225 +342,105 @@ def generate_step(
         y, logprobs = next_y, next_logprobs
 
 def stream_generate(
-    model: nn.Module,
-    tokenizer: Union[PreTrainedTokenizer, TokenizerWrapper],
-    prompt: str,
-    max_tokens: int = 100,
-    stop: Optional[List[str]] = None,
-    return_cache: bool = False,
-    verbose: bool = False,
-    **kwargs,
-) -> Generator[Union[str, Tuple[str, StepOutput]], None, None]:
-    """
-    A generator producing text based on the given prompt from the model.
+        model: nn.Module, 
+        tokenizer: TokenizerWrapper, 
+        prompt: str,
+        max_tokens: int = 512,
+        stop: Optional[List[str]] = None,
+        cache_history: Union[StepOutput, CacheHistory] = None,
+        verbose: bool = False,
+        **kwargs
+    ) -> Iterator[GenerateOutput]:
+    # prepare prompt
+    prompt_tokens = tokenizer.encode(prompt)
+    prompt_tokens = remove_bos_duplicates(token_ids=prompt_tokens, bos_token_id=tokenizer.bos_token_id)
 
-    Args:
-        prompt (mx.array): The input prompt.
-        model (nn.Module): The model to use for generation.
-        max_tokens (int): The maximum number of tokens to generate.
-        stop (Optional[List[str]], optional): List of words to stop generation. The stop words will be returned. Defaults to None.
-        return_cache (bool, optional): Whether to return the last step output.
-        verbose (bool, optional): Whether to print prompt processing time and stats. Defaults to False.
-        kwargs: The remaining options get passed to :func:`generate_step`.
-          See :func:`generate_step` for more details.
-
-    Yields:
-        Generator[Union[str, Tuple[str, StepOutput]], None, None]: A generator producing text.
-    """
-    if not isinstance(tokenizer, TokenizerWrapper):
-        tokenizer = TokenizerWrapper(tokenizer)
-
-    tokens = tokenizer.encode(prompt)
-    # remove duplicated bos tokens
-    if len(tokens) > 1:
-         if tokens[0] == tokenizer.bos_token_id:
-            while tokens[1] == tokenizer.bos_token_id:
-                tokens = tokens[:1] + tokens[2:]
-    prompt_tokens = mx.array(tokens)
-    detokenizer = tokenizer.detokenizer
-
+    # prepare for generation
+    detokenizer = tokenizer._detokenizer
     detokenizer.reset()
-    stop = [] if stop is None else list(filter(lambda x: x != '', stop))
-    output_text = ''
-    contain_stop = False
-    for step_output, n in zip(
-        generate_step(prompt_tokens, model, verbose=verbose, **kwargs),
-        range(max_tokens),
+    finish_reason = None
+    stop = [] if stop is None else list(set(stop))
+    stop = list(filter(lambda x: x != '', stop)) # remove empty strings
+    stop_tuple = [(s, len(s)) for s in stop]
+    stop_tuple.sort(key=lambda x: x[1], reverse=True)
+    eos_token = tokenizer.eos_token
+    eos_tuple = [eos_token, len(eos_token)] if eos_token else None
+    stop_suffix = None
+    prompt_len = len(prompt_tokens)
+    text = ''
+    for step, n in zip(
+        generate_step(prompt=mx.array(prompt_tokens), model=model, cache_history=cache_history, verbose=verbose, **kwargs),
+        range(max_tokens)
     ):
-        if (step_output.token == tokenizer.eos_token_id) or contain_stop:
+        if n + 1 == max_tokens:
+            finish_reason = 'length'
+        detokenizer.add_token(step.token)
+        text += detokenizer.last_segment
+        sc = stopping_criteria(text=text, stop_tuple=stop_tuple, eos_tuple=eos_tuple)
+        if sc.stop_met:
+            if sc.trim_length:
+                stop_suffix = text[-sc.trim_length:]
+                finish_reason = 'stop'
             break
-        detokenizer.add_token(step_output.token)
-        tokens.append(step_output.token)
-        last_segment = detokenizer.last_segment
-        output_text += last_segment
-
-        if any([x in output_text for x in stop]):
-            contain_stop = True
-
-        # Yield the last segment if streaming
-        if return_cache:
-            yield last_segment, step_output
-        else:
-            yield last_segment
+        if any(
+            (sequence_overlap(text, s) for s in stop)
+        ):
+            continue
+        new_text = text
+        text = ''
+        yield GenerateOutput(text=new_text, step=step, finish_reason=finish_reason, prompt_len=prompt_len)
 
     detokenizer.finalize()
-    if return_cache:
-        yield detokenizer.last_segment, step_output
-    else:
-        yield detokenizer.last_segment
+    text += detokenizer.last_segment
+    if text:
+        if stop_suffix is not None:
+            text = text[: -len(stop_suffix)]
+        yield GenerateOutput(text=text, step=step, finish_reason=finish_reason, prompt_len=prompt_len)
 
 def generate(
-    model: nn.Module,
-    tokenizer: Union[PreTrainedTokenizer, TokenizerWrapper],
-    prompt: str,
-    max_tokens: int = 100,
-    stop: Optional[List[str]] = None,
-    return_cache: bool = False,
-    verbose: bool = False,
-    formatter: Optional[Callable] = None,
-    **kwargs,
-) -> Union[str, Tuple[str, StepOutput]]:
-    """
-    Generate a complete response from the model.
-
-    Args:
-        model (nn.Module): The language model.
-        tokenizer (PreTrainedTokenizer): The tokenizer.
-        prompt (str): The string prompt.
-        max_tokens (int): The maximum number of tokens. Default: ``100``.
-        stop (Optional[List[str]], optional): List of words to stop generation. The stop words will be returned. Defaults to None.
-        return_cache (bool, optional): Whether to return the last step output.
-        verbose (bool, optional): Whether to print prompt processing time and stats. Defaults to False.
-        formatter (Optional[Callable]): A function which takes a token and a
-            probability and displays it.
-        kwargs: The remaining options get passed to :func:`generate_step`.
-            See :func:`generate_step` for more details.
-    """
-    if not isinstance(tokenizer, TokenizerWrapper):
-        tokenizer = TokenizerWrapper(tokenizer)
-
-    tokens = tokenizer.encode(prompt)
-    # remove duplicated bos tokens
-    if len(tokens) > 1:
-         if tokens[0] == tokenizer.bos_token_id:
-            while tokens[1] == tokenizer.bos_token_id:
-                tokens = tokens[:1] + tokens[2:]
-    prompt_tokens = mx.array(tokens)
-    detokenizer = tokenizer.detokenizer
-
-    detokenizer.reset()
-    stop = [] if stop is None else list(filter(lambda x: x != '', stop))
-    output_text = ''
-    contain_stop = False
-
-    for step_output, n in zip(
-        generate_step(prompt_tokens, model, verbose=verbose, **kwargs),
-        range(max_tokens),
+        model: nn.Module, 
+        tokenizer: TokenizerWrapper, 
+        prompt: str,
+        max_tokens: int = 512,
+        stop: Optional[List[str]] = None,
+        cache_history: Union[StepOutput, CacheHistory] = None,
+        verbose: bool = False,
+        **kwargs
     ):
-        if n == 0:
-            tic = time.perf_counter()
-        if (step_output.token == tokenizer.eos_token_id) or contain_stop:
+    # prepare prompt
+    prompt_tokens = tokenizer.encode(prompt)
+    prompt_tokens = remove_bos_duplicates(token_ids=prompt_tokens, bos_token_id=tokenizer.bos_token_id)
+
+    # prepare for generation
+    detokenizer = tokenizer._detokenizer
+    detokenizer.reset()
+    finish_reason = None
+    stop = [] if stop is None else list(set(stop))
+    stop = list(filter(lambda x: x != '', stop)) # remove empty strings
+    stop_tuple = [(s, len(s)) for s in stop]
+    stop_tuple.sort(key=lambda x: x[1], reverse=True)
+    eos_token = tokenizer.eos_token
+    eos_tuple = [eos_token, len(eos_token)] if eos_token else None
+    stop_suffix = None
+    prompt_len = len(prompt_tokens)
+    text = ''
+    for step, n in zip(
+        generate_step(prompt=mx.array(prompt_tokens), model=model, cache_history=cache_history, verbose=verbose, **kwargs),
+        range(max_tokens)
+    ):
+        if n + 1 == max_tokens:
+            finish_reason = 'length'
+        detokenizer.add_token(step.token)
+        text += detokenizer.last_segment
+        sc = stopping_criteria(text=text, stop_tuple=stop_tuple, eos_tuple=eos_tuple)
+        if sc.stop_met:
+            if sc.trim_length:
+                stop_suffix = text[-sc.trim_length:]
+                finish_reason = 'stop'
             break
-        detokenizer.add_token(step_output.token)
-        output_text += detokenizer.last_segment
-        if any([x in output_text for x in stop]):
-            contain_stop = True
 
-        if verbose:
-            if formatter:
-                # We have to finalize so that the prob corresponds to the last segment
-                detokenizer.finalize()
-                formatter(detokenizer.last_segment, mx.exp(step_output.logprobs[step_output.token]).item())
-
-    token_count = n + 1
     detokenizer.finalize()
-
-    if verbose:
-        gen_time = time.perf_counter() - tic
-        print(detokenizer.last_segment, flush=True)
-        print("=" * 10)
-        if token_count == 0:
-            print("No tokens generated for this prompt")
-            return
-        gen_tps = (token_count - 1) / gen_time
-        print(f"Generation: {token_count} tokens, {gen_tps:.3f} tokens-per-sec")
-        peak_mem = mx.metal.get_peak_memory() / 2**30
-        print(f"Peak memory: {peak_mem:.3f} GB")
-    
-    return detokenizer.text, step_output if return_cache else detokenizer.text
-
-def find_roots(text: str, stop: List[str], stop_len: List[int]) -> Tuple[str, str]:
-    """This function is a helper function for stopping stop words from showing up while doing work streaming in some custom llm classes. Not intended to be used alone.
-
-    Args:
-        text (str): Output of the model.
-        stop (List[str]): List of stop words.
-        stop_len (List[int]): List of the lengths of the stop words.
-
-    Returns:
-        Tuple[str, str]: Curated output of the model, potential root of stop words.
-    """
-    root = ''
-    for w in stop:
-        if w in text:
-            return text.split(w)[0], w
-    for i, w in enumerate(stop):
-        for j in range(stop_len[i]):
-            if text[-(j + 1):]==w[:j+1]:
-                root = w[:j+1]
-                break
-        if root:
-            break
-    text  = text[:-len(root)] if root else text
-    return text, root
-
-def enforce_stop_tokens(text: str, stop: List[str]) -> str:
-    """Strip text with the given stop words.
-
-    Args:
-        text (str): Text to strip.
-        stop (List[str]): List of stop words.
-
-    Returns:
-        str: Stripped text.
-    """
-    stop_pos = list(map(lambda x: text.find(x), stop))
-    stop_map = list(zip(stop, stop_pos))
-    stop_map = list(filter(lambda x: x[1] != -1, stop_map))
-    if len(stop_map) != 0:
-        stop_map.sort(key=lambda x: x[1])
-        stop_word = stop_map[0][0]
-        return text.split(sep=stop_word)[0]
-    else:
-        return text
-
-def textgen_iterator(text_generator: Iterator[str], stop: List[str]) -> Iterator[str]:
-    """Make a text generator stop before spitting out the stop words.
-
-    Args:
-        text_generator (Iterator[str]): Text generator to transform.
-        stop (List[str]): Stop words.
-
-    Yields:
-        Iterator[str]: Text generator with stop words applied.
-    """
-    text, output, root = '', '', ''
-    cont = True
-    stop_len = list(map(len, stop))
-    for i in text_generator:
-        temp = text + root + i
-        text, root = find_roots(temp, stop, stop_len)
-        if root in stop:
-            cont = False
-        token = text.removeprefix(output)
-        output += token
-        if cont:
-            yield token
-        else:
-            yield ''
-    if root not in stop:
-        yield root
-    else:
-        yield ''
-
-
+    text += detokenizer.last_segment
+    if stop_suffix is not None:
+        text = text[: -len(stop_suffix)]
+    return GenerateOutput(text=text, step=step, finish_reason=finish_reason, prompt_len=prompt_len)
