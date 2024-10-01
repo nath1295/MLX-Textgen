@@ -71,7 +71,7 @@ You can check the details of other engine arguments by running:
 mlx_textgen.server --help
 ```
 
-You can sepcify the number of cache slots for each model, minimum number of tokens to create a cache file, and API keys etc.
+You can specify the number of cache slots for each model, minimum number of tokens to create a cache file, and API keys etc.
 
 ## License
 This project is licensed under the terms of the MIT license.
