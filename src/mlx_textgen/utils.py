@@ -136,7 +136,7 @@ def stopping_criteria(
         StopCondition: A status class stating whether the generation should stop and the length of text to trim.
     """
     if eos_tuple is not None and eos_tuple[0] in text:
-        return StopCondition(stop_met=True, trim_length=len(text.split(eos_tuple)[-1]) + eos_tuple[1])
+        return StopCondition(stop_met=True, trim_length=len(text.split(eos_tuple[0])[-1]) + eos_tuple[1])
 
     return next(
         (StopCondition(stop_met=True, trim_length=length + len(text.split(stop)[-1]))
