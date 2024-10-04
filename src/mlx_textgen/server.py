@@ -83,10 +83,6 @@ models = [dict(id=m, object='model', created=int(dt.now().timestamp()), owned_by
 app = FastAPI()
 semaphore = asyncio.Semaphore(1)
 
-@app.get('/v1/models')
-async def get_models() -> JSONResponse:
-    return JSONResponse(content=jsonable_encoder(dict(object='list', data=models)))
-
 def get_return_dict(
         text: Union[str, List[str]], 
         id: str, model: str, 
@@ -209,7 +205,6 @@ def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
         yield f'data: {json.dumps(return_dict)}\n\n'
     yield 'data: [DONE]'
 
-    
 def static_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     extra_body = args.get('extra_body', dict())
     id = uuid.uuid4().hex
@@ -293,6 +288,9 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     api_key = request.headers.get('authorization', 'Bearer ').removeprefix('Bearer ')
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
+    model = content.get('model')
+    if model not in models:
+        return JSONResponse(jsonable_encoder(dict(error=f'Model "{model}" does not exist.')), status_code=404)
     stream = content.get('stream', False)
     async with semaphore:
         if ((stream) and (isinstance(content['prompt'], str))):
@@ -308,6 +306,9 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     api_key = request.headers.get('authorization', 'Bearer ').removeprefix('Bearer ')
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
+    model = content.get('model')
+    if model not in models:
+        return JSONResponse(jsonable_encoder(dict(error=f'Model "{model}" does not exist.')), status_code=404)
     stream = content.get('stream', False)
     async with semaphore:
         if stream:
@@ -315,7 +316,14 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
         else:
             result = await async_chat_generate(content)
             return JSONResponse(jsonable_encoder(result))
-        
+
+@app.get('/v1/models')
+async def get_models(request: Request) -> JSONResponse:
+    api_key = request.headers.get('authorization', 'Bearer ').removeprefix('Bearer ')
+    if ((api_key not in api_keys) and (len(api_keys) != 0)):
+        return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
+    return JSONResponse(content=jsonable_encoder(dict(object='list', data=models))) 
+
 def main():
     uvicorn.run(app, port=port)
 

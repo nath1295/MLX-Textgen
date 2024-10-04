@@ -20,7 +20,7 @@ pip install mlx-textgen
 ### 1. Multiple KV cache slots support
 All the KV cache are stored on disk. Therefore, unlike other LLM serving engine, a newly created KV cache will not overwrite the existing KV cache. This works better for agenic workflows where different types of prompts are being used frequently without losing previous cache for a long prompt.
 
-### 2. Multiple LLM serving
+### 2. Multiple LLMs serving
 Only one model is loaded on ram at a time, but the engine leverage MLX fast module loading time to spin up another model when it is requested. This allows serving multiple models with one endpoint.
 
 ### 3. Automatic model quantisation
@@ -34,7 +34,7 @@ You can quickly set up a OpenAI API server with a single command.
 mlx_textgen.server --model NousResearch/Hermes-3-Llama-3.1-8B --qunatize q8 --port 5001
 ```
 
-### 2. Serving a multiple models
+### 2. Serving a multiple models server
 Create a config file template and add as many model as you like.
 ```bash
 mlx_textgen.create_config --num-models 2
