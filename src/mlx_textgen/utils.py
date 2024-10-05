@@ -359,11 +359,14 @@ def stream_generate(
     detokenizer = tokenizer._detokenizer
     detokenizer.reset()
     finish_reason = None
-    stop = [] if stop is None else list(set(stop))
+    eos_token = tokenizer.eos_token
+    stop = [] if stop is None else stop
+    if eos_token is not None:
+        stop.append(eos_token)
+    stop = list(set(stop))
     stop = list(filter(lambda x: x != '', stop)) # remove empty strings
     stop_tuple = [(s, len(s)) for s in stop]
     stop_tuple.sort(key=lambda x: x[1], reverse=True)
-    eos_token = tokenizer.eos_token
     eos_tuple = [eos_token, len(eos_token)] if eos_token else None
     stop_suffix = None
     prompt_len = len(prompt_tokens)
@@ -415,11 +418,14 @@ def generate(
     detokenizer = tokenizer._detokenizer
     detokenizer.reset()
     finish_reason = None
-    stop = [] if stop is None else list(set(stop))
+    eos_token = tokenizer.eos_token
+    stop = [] if stop is None else stop
+    if eos_token is not None:
+        stop.append(eos_token)
+    stop = list(set(stop))
     stop = list(filter(lambda x: x != '', stop)) # remove empty strings
     stop_tuple = [(s, len(s)) for s in stop]
     stop_tuple.sort(key=lambda x: x[1], reverse=True)
-    eos_token = tokenizer.eos_token
     eos_tuple = [eos_token, len(eos_token)] if eos_token else None
     stop_suffix = None
     prompt_len = len(prompt_tokens)
