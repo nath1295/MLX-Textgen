@@ -289,7 +289,7 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
     model = content.get('model')
-    if model not in models:
+    if model not in engine.models.keys():
         return JSONResponse(jsonable_encoder(dict(error=f'Model "{model}" does not exist.')), status_code=404)
     stream = content.get('stream', False)
     async with semaphore:
@@ -307,7 +307,7 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
     model = content.get('model')
-    if model not in models:
+    if model not in engine.models.keys():
         return JSONResponse(jsonable_encoder(dict(error=f'Model "{model}" does not exist.')), status_code=404)
     stream = content.get('stream', False)
     async with semaphore:
