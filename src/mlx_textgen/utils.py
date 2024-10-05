@@ -122,22 +122,17 @@ def find_max_prefix_num(new: List[int], baseline: List[int]) -> int:
 
 def stopping_criteria(
         text: str,
-        stop_tuple: List[Tuple[str, int]],
-        eos_tuple: Union[Tuple[str, int], None],
+        stop_tuple: List[Tuple[str, int]]
     ) -> StopCondition:
     """Get the stopping condition with stop words and eos token.
 
     Args:
         text (str): Text to be determined to stop or not.
         stop_tuple (List[Tuple[str, int]]): List of tuple with the stop word string and the length of the string. Must be ordered descendingly by length.
-        eos_tuple (Union[Tuple[str, int], None]): Eos token string and it's length.
 
     Returns:
         StopCondition: A status class stating whether the generation should stop and the length of text to trim.
     """
-    if eos_tuple is not None and eos_tuple[0] in text:
-        return StopCondition(stop_met=True, trim_length=len(text.split(eos_tuple[0])[-1]) + eos_tuple[1])
-
     return next(
         (StopCondition(stop_met=True, trim_length=length + len(text.split(stop)[-1]))
         for stop, length in stop_tuple if stop in text), StopCondition(stop_met=False, trim_length=0)
@@ -367,7 +362,6 @@ def stream_generate(
     stop = list(filter(lambda x: x != '', stop)) # remove empty strings
     stop_tuple = [(s, len(s)) for s in stop]
     stop_tuple.sort(key=lambda x: x[1], reverse=True)
-    eos_tuple = [eos_token, len(eos_token)] if eos_token else None
     stop_suffix = None
     prompt_len = len(prompt_tokens)
     text = ''
@@ -379,7 +373,7 @@ def stream_generate(
             finish_reason = 'length'
         detokenizer.add_token(step.token)
         text += detokenizer.last_segment
-        sc = stopping_criteria(text=text, stop_tuple=stop_tuple, eos_tuple=eos_tuple)
+        sc = stopping_criteria(text=text, stop_tuple=stop_tuple)
         if sc.stop_met:
             if sc.trim_length:
                 stop_suffix = text[-sc.trim_length:]
@@ -397,7 +391,7 @@ def stream_generate(
     text += detokenizer.last_segment
     if text:
         if stop_suffix is not None:
-            text = text[: -len(stop_suffix)]
+            text = text.split(stop_suffix)[0]
         yield GenerateOutput(text=text, step=step, finish_reason=finish_reason, prompt_len=prompt_len)
 
 def generate(
@@ -426,7 +420,6 @@ def generate(
     stop = list(filter(lambda x: x != '', stop)) # remove empty strings
     stop_tuple = [(s, len(s)) for s in stop]
     stop_tuple.sort(key=lambda x: x[1], reverse=True)
-    eos_tuple = [eos_token, len(eos_token)] if eos_token else None
     stop_suffix = None
     prompt_len = len(prompt_tokens)
     text = ''
@@ -438,7 +431,7 @@ def generate(
             finish_reason = 'length'
         detokenizer.add_token(step.token)
         text += detokenizer.last_segment
-        sc = stopping_criteria(text=text, stop_tuple=stop_tuple, eos_tuple=eos_tuple)
+        sc = stopping_criteria(text=text, stop_tuple=stop_tuple)
         if sc.stop_met:
             if sc.trim_length:
                 stop_suffix = text[-sc.trim_length:]
@@ -448,5 +441,5 @@ def generate(
     detokenizer.finalize()
     text += detokenizer.last_segment
     if stop_suffix is not None:
-        text = text[: -len(stop_suffix)]
+        text = text.split(stop_suffix)[0]
     return GenerateOutput(text=text, step=step, finish_reason=finish_reason, prompt_len=prompt_len)
