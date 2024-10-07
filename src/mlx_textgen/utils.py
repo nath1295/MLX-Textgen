@@ -35,6 +35,14 @@ class GenerateOutput(NamedTuple):
     finish_reason: FINISH_REASON
     prompt_len: int
 
+class EngineOutput(NamedTuple):
+    text: str
+    token: int
+    token_ids: List[int]
+    logprobs: mx.array
+    prompt_len: int
+    finish_reason: FINISH_REASON
+
 class StopCondition(NamedTuple):
     stop_met: bool
     trim_length: int

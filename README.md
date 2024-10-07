@@ -10,11 +10,22 @@ MLX-Textgen is a light-weight LLM serving engine that utilize MLX and a smart KV
 - Multiple models serving with Fastapi
 - Common OpenAI API endpoints: `/v1/models`, `/v1/completions`, `/v1/chat/completions`
 
+## Updates
+**2024-10-07** - Guided decoding is supported with [Outlines](https://github.com/dottxt-ai/outlines) backend.
+
 ## Installing MLX-Textgen
-MLX-textgen can be easily installed with `pip`
+MLX-textgen can be easily installed with `pip`:
 ```
 pip install mlx-textgen
 ```
+
+If you want guided decoding support for structured text generation, please install [Outlines](https://github.com/dottxt-ai/outlines) from source as well. Current realease of Outlines (`v0.0.46`) might not work.
+```bash
+git clone https://github.com/dottxt-ai/outlines.git;
+cd outlines;
+pip install -U .;
+```
+You might need to install Pytorch as a dependency of Outlines as well.
 
 ## Features
 ### 1. Multiple KV cache slots support
@@ -25,6 +36,37 @@ Only one model is loaded on ram at a time, but the engine leverage MLX fast modu
 
 ### 3. Automatic model quantisation
 When configuring your model, you can specify the quantisation to increase your inference speed and lower memory usage. The original model is converted to MLX quantised model format when initialising the serving engine.
+
+### 4. Guided decoding with Regex, Json schema, and Grammar
+If [Outlines](https://github.com/dottxt-ai/outlines) is installed with the recommended way, guided decoding is supported. If you are using the `openai` package in python, you can pass your guided decoding argument `guided_json`, `guided_choice`, `guided_regex`, or `guided_grammar` as extra arguments and create structured generation in a similar fashion to [vllm](https://github.com/vllm-project/vllm).
+
+```python
+from pydantic import BaseModel
+from openai import Client
+
+client = Client(api_key='Your API Key', base_url='http://localhost:5001/v1/')
+
+class Customer(BaseModel):
+    first_name: str
+    last_name: str
+    age: int
+
+prompt = """Extract the customer information from the following text in json format:
+"...The customer David Stone join our membership in 20023, his current age is thirty five years old...."
+"""
+for i in client.chat.completions.create(
+    model='my_llama_model',
+    messages=[dict(role='user', content=prompt)],
+    max_tokens=200,
+    stream=True,
+    extra_body=dict(
+        guided_json=Customer.model_json_schema()
+    )
+):
+    print(i.choices[0].delta.content, end='')
+
+# Output: {"first_name": "David", "last_name": "Stone", "age": 35}
+```
 
 ## Usage
 ### 1. Serving a single model
