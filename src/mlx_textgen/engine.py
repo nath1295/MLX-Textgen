@@ -3,7 +3,8 @@ from mlx_lm.tokenizer_utils import load_tokenizer
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx.nn import Module
 import mlx.core as mx
-from .utils import mlx_cache_dir, generate, stream_generate, remove_bos_duplicates, FINISH_REASON
+from .utils import mlx_cache_dir, generate, stream_generate, remove_bos_duplicates, EngineOutput
+from .guided_decoding import MlxLLM, get_choice_processor, get_json_processor, get_regex_processor, get_grammar_processor, OUTLINE_INSTALLED
 from .caching import CacheManager
 from pathlib import Path
 from logging import Logger
@@ -111,14 +112,6 @@ def get_model_and_tokenizer(
     tokenizer = load_tokenizer(model_path=mlx_path if tokenizer_id_or_path is None else Path(tokenizer_id_or_path), tokenizer_config_extra=tokenizer_config)
     return model, tokenizer
 
-class EngineOutput(NamedTuple):
-    text: str
-    token: int
-    token_ids: List[int]
-    logprobs: mx.array
-    prompt_len: int
-    finish_reason: FINISH_REASON
-
 class ModelEngine:
 
     def __init__(self, 
@@ -147,6 +140,7 @@ class ModelEngine:
         self.tokenizer: Optional[TokenizerWrapper] = None
         self.current_model: Optional[str] = None
         self.cache_manager: Optional[CacheManager] = None
+        self.outline_model: Optional[MlxLLM] = None
         self.cache_dir = os.path.join(mlx_cache_dir(), 'prompt_cache')
         for model_config in self.model_configs:
             self._prepare_model(model_config=model_config)
@@ -186,7 +180,7 @@ class ModelEngine:
         if model_name not in self.models.keys():
             raise ValueError(f'No model named "{model_name}".')
         if model_name != self.current_model:
-            del self.model, self.tokenizer, self.cache_manager
+            del self.model, self.tokenizer, self.cache_manager, self.outline_model
             mx.metal.clear_cache()
             model_args = self.models[model_name]._asdict()
             model_args.pop('model_name')
@@ -198,6 +192,8 @@ class ModelEngine:
                 max_keep=self.max_keep,
                 logger=self.logger
                 )
+            if OUTLINE_INSTALLED:
+                self.outline_model = MlxLLM(model=self.model, tokenizer=self.tokenizer, cache_manager=self.cache_manager)
     
     def generate(self,
             model_name: str,
@@ -214,6 +210,11 @@ class ModelEngine:
             logit_bias: Optional[Dict[int, float]] = None,
             prefill_step_size: Optional[int] = None,
             seed: Optional[int] = None,
+            guided_json: Optional[Union[str, dict]] = None,
+            guided_choice: Optional[List[str]] = None,
+            guided_regex: Optional[str] = None,
+            guided_grammar: Optional[str] = None,
+            guided_whitespace_pattern: Optional[str] = None,
             **kwargs
         ) -> Union[EngineOutput, Iterator[EngineOutput]]:
         """Generate text with a model.
@@ -240,66 +241,126 @@ class ModelEngine:
             Iterator[Union[str, Iterator[str]]]: Generator of generated text if `stream=True`.
         """
         self._switch_model(model_name=model_name)
-        prompt_tokens = self.tokenizer.encode(prompt)
-        prompt_tokens = remove_bos_duplicates(prompt_tokens, self.tokenizer.bos_token_id)
-        cache, cache_id = self.cache_manager.find_cache(token_ids=prompt_tokens)
-        gen_kwargs = dict(
-            max_tokens=max_new_tokens,
-            stop=stop,
-            temp=temperature,
-            repetition_penalty=repetition_penalty,
-            repetition_context_size=repetition_context_size,
-            top_p=top_p,
-            min_p=min_p,
-            min_tokens_to_keep=min_tokens_to_keep,
-            logit_bias=logit_bias,
-            prefill_step_size=self.prefill_step_size if prefill_step_size is None else prefill_step_size,
-            cache_history=cache,
-            seed=seed,
-            verbose=True
-        )
-        if stream:
-            def stream_output():
-                nonlocal cache
-                try:
-                    for output in stream_generate(
-                        model=self.model,
-                        tokenizer=self.tokenizer,
-                        prompt=prompt,
-                        **gen_kwargs
-                    ):
-                        cache = output.step
-                        yield EngineOutput(
-                            text=output.text,
-                            token=output.step.token,
-                            token_ids=output.step.token_ids,
-                            logprobs=output.step.logprobs,
-                            prompt_len=output.prompt_len,
-                            finish_reason=output.finish_reason
-                        )
-                finally:
-                    self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
-                    del cache, output
-                    mx.metal.clear_cache()
-
-            return stream_output()
-        else:
-            output = generate(
-                model=self.model,
-                tokenizer=self.tokenizer,
-                prompt=prompt,
-                **gen_kwargs
+        guided_decoding = False
+        if OUTLINE_INSTALLED and (guided_choice) is not None:
+            guided_decoding = True
+            gen_kwargs = dict(
+                prompt=prompt, 
+                logits_processor=get_choice_processor(guided_choice, self.outline_model),
+                max_tokens=max_new_tokens,
+                temp=temperature,
+                top_p=top_p,
+                seed=seed
             )
-            cache = output.step
-            engine_output = EngineOutput(
-                    text=output.text,
-                    token=output.step.token,
-                    token_ids=output.step.token_ids,
-                    logprobs=output.step.logprobs,
-                    prompt_len=output.prompt_len,
-                    finish_reason=output.finish_reason
+        elif OUTLINE_INSTALLED and (guided_json) is not None:
+            guided_decoding = True
+            gen_kwargs = dict(
+                prompt=prompt, 
+                logits_processor=get_json_processor(guided_json, self.outline_model, guided_whitespace_pattern),
+                max_tokens=max_new_tokens,
+                temp=temperature,
+                top_p=top_p,
+                seed=seed
+            )
+        elif OUTLINE_INSTALLED and (guided_regex) is not None:
+            guided_decoding = True
+            gen_kwargs = dict(
+                prompt=prompt, 
+                logits_processor=get_regex_processor(guided_regex, self.outline_model),
+                max_tokens=max_new_tokens,
+                temp=temperature,
+                top_p=top_p,
+                seed=seed
+            )
+        elif OUTLINE_INSTALLED and (guided_grammar) is not None:
+            guided_decoding = True
+            gen_kwargs = dict(
+                prompt=prompt, 
+                logits_processor=get_grammar_processor(guided_grammar, self.outline_model),
+                max_tokens=max_new_tokens,
+                temp=temperature,
+                top_p=top_p,
+                seed=seed
+            )
+
+        else:
+            prompt_tokens = self.tokenizer.encode(prompt)
+            prompt_tokens = remove_bos_duplicates(prompt_tokens, self.tokenizer.bos_token_id)
+            cache, cache_id = self.cache_manager.find_cache(token_ids=prompt_tokens)
+            gen_kwargs = dict(
+                max_tokens=max_new_tokens,
+                stop=stop,
+                temp=temperature,
+                repetition_penalty=repetition_penalty,
+                repetition_context_size=repetition_context_size,
+                top_p=top_p,
+                min_p=min_p,
+                min_tokens_to_keep=min_tokens_to_keep,
+                logit_bias=logit_bias,
+                prefill_step_size=self.prefill_step_size if prefill_step_size is None else prefill_step_size,
+                cache_history=cache,
+                seed=seed,
+                verbose=True
+            )
+
+        if stream:
+            if not guided_decoding:
+                def stream_output():
+                    nonlocal cache
+                    try:
+                        for output in stream_generate(
+                            model=self.model,
+                            tokenizer=self.tokenizer,
+                            prompt=prompt,
+                            **gen_kwargs
+                        ):
+                            cache = output.step
+                            yield EngineOutput(
+                                text=output.text,
+                                token=output.step.token,
+                                token_ids=output.step.token_ids,
+                                logprobs=output.step.logprobs,
+                                prompt_len=output.prompt_len,
+                                finish_reason=output.finish_reason
+                            )
+                    finally:
+                        self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
+                        del cache, output
+                        mx.metal.clear_cache()
+            else:
+                if self.logger:
+                    self.logger.info('Using guided decoding...')
+                def stream_output():
+                    try:
+                        for eo in self.outline_model.stream(**gen_kwargs):
+                            yield eo
+                    finally:
+                        mx.metal.clear_cache()
+            return stream_output()
+
+        else:
+            if not guided_decoding:
+                output = generate(
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    prompt=prompt,
+                    **gen_kwargs
                 )
-            self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
-            del cache, output
-            mx.metal.clear_cache()
+                cache = output.step
+                engine_output = EngineOutput(
+                        text=output.text,
+                        token=output.step.token,
+                        token_ids=output.step.token_ids,
+                        logprobs=output.step.logprobs,
+                        prompt_len=output.prompt_len,
+                        finish_reason=output.finish_reason
+                    )
+                self.cache_manager.save_cache(cache=cache, from_cache_id=cache_id)
+                del cache, output
+                mx.metal.clear_cache()
+            else:
+                if self.logger:
+                    self.logger.info('Using guided decoding...')
+                engine_output = self.outline_model.generate(**gen_kwargs)
+                mx.metal.clear_cache()
             return engine_output

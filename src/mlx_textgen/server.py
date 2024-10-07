@@ -158,8 +158,18 @@ def create_logprobs(token: int, logprobs: mx.array, top: int) -> Tuple[float, Di
     return logprobs[token].item(), dict(top_token_info)
 
 # Generation
+def get_extra_body(args: Dict[str, Any]) -> Dict[str, Any]:
+    extra_body = dict()
+    white_list = ['min_p', 'min_tokens_to_keep', 'logit_bias',
+        'guided_choice', 'guided_json', 'guided_regex', 'guided_grammar', 'guide_whitespace_pattern']
+    exist_list = ['model', 'prompt', 'stop', 'max_tokens', 'temperature', 'top_p', 'seed', 'frequency_penalty', 'logprobs', 'top_logprobs']
+    for k, v in args.items():
+        if (k not in exist_list) and (k in white_list):
+            extra_body[k] = v
+    return extra_body
+
 def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
-    extra_body = args.get('extra_body', dict())
+    extra_body = get_extra_body(args)
     id = uuid.uuid4().hex
     response = engine.generate(
         model_name=args['model'],
@@ -206,7 +216,7 @@ def stream_generate(args: Dict[str, Any]) -> Iterator[str]:
     yield 'data: [DONE]'
 
 def static_generate(args: Dict[str, Any]) -> Dict[str, Any]:
-    extra_body = args.get('extra_body', dict())
+    extra_body = get_extra_body(args)
     id = uuid.uuid4().hex
     created = int(dt.now().timestamp())
     if isinstance(args['prompt'], str):
@@ -285,6 +295,7 @@ async def async_chat_generate(args: Dict[str, Any]):
 async def completions(request: Request) -> Union[StreamingResponse, JSONResponse]:
     content = await request.json()
     content['endpoint'] = 'text_completion'
+    logger.info(content)
     api_key = request.headers.get('authorization', 'Bearer ').removeprefix('Bearer ')
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
@@ -303,6 +314,7 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
 async def completions(request: Request) -> Union[StreamingResponse, JSONResponse]:
     content = await request.json()
     content['endpoint'] = 'chat.completion'
+    logger.info(content)
     api_key = request.headers.get('authorization', 'Bearer ').removeprefix('Bearer ')
     if ((api_key not in api_keys) and (len(api_keys) != 0)):
         return JSONResponse(jsonable_encoder(dict(error='Invalid API key.')), status_code=404)
