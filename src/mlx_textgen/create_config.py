@@ -1,5 +1,4 @@
-from .engine import ModelConfig
-from .utils import PACKAGE_NAME
+from .model_utils import PACKAGE_NAME, ModelConfig
 import yaml
 from argparse import ArgumentParser
 

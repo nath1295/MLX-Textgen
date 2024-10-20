@@ -15,8 +15,8 @@ classifiers = [
     "Operating System :: MacOS :: MacOS X",
 ]
 dependencies = [
-    "mlx-lm>=0.18.2",
-    "orjson",
+    "mlx-lm>=0.19.1",
+    "outlines>=0.1.1",
     "fastapi",
     "uvicorn"
 ]
@@ -26,6 +26,7 @@ Homepage = "https://github.com/nath1295/MLX-Textgen"
 
 [project.scripts]
 "mlx_textgen.server" = "mlx_textgen.server:main"
+"mlx_textgen.clear_cache" = "mlx_textgen.model_utils:clear_prompt_cache"
 "mlx_textgen.create_config" = "mlx_textgen.create_config:main"
 
 [build-system]

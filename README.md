@@ -11,6 +11,7 @@ MLX-Textgen is a light-weight LLM serving engine that utilize MLX and a smart KV
 - Common OpenAI API endpoints: `/v1/models`, `/v1/completions`, `/v1/chat/completions`
 
 ## Updates
+**2024-10-20** - Batch inference and function calling supported. Breaking changes in the save format for the KV caches. Run `mlx_textgen.clear_cache` after updating to avoid issues.
 **2024-10-07** - Guided decoding is supported with [Outlines](https://github.com/dottxt-ai/outlines) backend.
 
 ## Installing MLX-Textgen
@@ -19,26 +20,31 @@ MLX-textgen can be easily installed with `pip`:
 pip install mlx-textgen
 ```
 
-If you want guided decoding support for structured text generation, please install [Outlines](https://github.com/dottxt-ai/outlines) from source as well. Current realease of Outlines (`v0.0.46`) might not work.
-```bash
-git clone https://github.com/dottxt-ai/outlines.git;
-cd outlines;
-pip install -U .;
-```
-You might need to install Pytorch as a dependency of Outlines as well.
-
 ## Features
 ### 1. Multiple KV cache slots support
 All the KV cache are stored on disk. Therefore, unlike other LLM serving engine, a newly created KV cache will not overwrite the existing KV cache. This works better for agenic workflows where different types of prompts are being used frequently without losing previous cache for a long prompt.
 
-### 2. Multiple LLMs serving
+### 2. Guided decoding with Regex, Json schema, and Grammar
+You can pass your guided decoding argument `guided_json`, `guided_choice`, `guided_regex`, or `guided_grammar` as extra arguments and create structured text generation in a similar fashion to [vllm](https://github.com/vllm-project/vllm).
+
+### 3. Batch inference support
+Batch inference is supported for multiple prompts or multiple generations for a single prompt. Just pass a list of prompts to the `prompt` argument to the `/v1/completions` endpoint or `n=2` (or more than 2) to the `/v1/chat/completions` or `v1/completions` endpoints for batch inferencing.
+
+### 4. Function calling support
+Function calling with the `/v1/chat/completions` is supported. Simply use the `tools` and `tool_choice` arguments to supply lists of tools. Note that instead of schema suggested by OpenAI, Pydantic models json schemas should be provided as the list of json schemas for `tools` as it is using Outlines to generate the arguments for 100% compliance. There are three modes of using function calling:
+1. `tool_choice="auto"`: The model will decide if tool calling is needed based on the conversation. If a tool is needed, it will pick the appropriate tool and generate the arguments. Otherwise, it will only response with normal text.
+2. `tool_choice="required"`: One of the given tools must be selected by the model. The model will pick the appropriate tool and generate the arguments.
+3. `tool_choice={"type": "function", "function": {"name": "<selected tool name>"}}`: The model will generate the arguments of the selected tools.  
+
+If function calling is triggered, the call arguments will be contained in the `tool_calls` attribute in the `choices` element in the response. The `finish_reason` will be `tool_call`.  
+
+If `tool_choice="none"` is passed, the list of tools provided will be ignored and the model will only generate normal text.
+
+### 5. Multiple LLMs serving
 Only one model is loaded on ram at a time, but the engine leverage MLX fast module loading time to spin up another model when it is requested. This allows serving multiple models with one endpoint.
 
-### 3. Automatic model quantisation
+### 6. Automatic model quantisation
 When configuring your model, you can specify the quantisation to increase your inference speed and lower memory usage. The original model is converted to MLX quantised model format when initialising the serving engine.
-
-### 4. Guided decoding with Regex, Json schema, and Grammar
-If [Outlines](https://github.com/dottxt-ai/outlines) is installed with the recommended way, guided decoding is supported. If you are using the `openai` package in python, you can pass your guided decoding argument `guided_json`, `guided_choice`, `guided_regex`, or `guided_grammar` as extra arguments and create structured generation in a similar fashion to [vllm](https://github.com/vllm-project/vllm).
 
 ```python
 from pydantic import BaseModel
