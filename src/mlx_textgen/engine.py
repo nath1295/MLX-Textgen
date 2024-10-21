@@ -16,7 +16,7 @@ from .generate_utils import (
     GenerationOutput, 
     OUTLINE_INSTALLED
     )
-from .chat_utils import get_chat_prompt, ChatTemplate, ToolCall
+from .chat_utils import ChatTemplate, convert_tool_to_json_schema, get_tool_name
 from .caching import CacheManager
 from logging import Logger
 from pydantic import BaseModel, Field, field_validator
@@ -374,15 +374,15 @@ class ModelEngine:
                     stop = [self.chat_template.tool_start]
             elif tool_choice == 'required':
                 tool_stage = 'pick_tool'
-                tool_names = [tool['title'] for tool in tools]
+                tool_names = [get_tool_name(tool) for tool in tools if get_tool_name(tool) is not None]
                 logits_processor = self._get_outlines_processor(guided_choice=tool_names)
             elif tool_choice == 'none':
                 pass
             else:
                 tool_stage = 'gen_args'
                 tool_name = tool_choice['function']['name']
-                tool_dict = list(filter(lambda x: x['title'] == tool_name, tools))[0]
-                logits_processor = self._get_outlines_processor(guided_json=tool_dict)
+                tool_dict = list(filter(lambda x: get_tool_name(x) == tool_name, tools))[0]
+                logits_processor = self._get_outlines_processor(guided_json=convert_tool_to_json_schema(tool_dict))
 
         mx.metal.clear_cache()
         
@@ -486,7 +486,7 @@ class ModelEngine:
                                 ])
                                 cache_history = CacheHistory(cache=make_empty_cache(model=self.model), token_ids=[]) if cache_history is None else cache_history
                                 gen_kwargs['cache_history'] = cache_history
-                                tool_names = [tool['title'] for tool in tools]
+                                tool_names = [get_tool_name(tool) for tool in tools if get_tool_name(tool) is not None]
                                 gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_choice=tool_names)
                                 yield g
 
@@ -507,8 +507,8 @@ class ModelEngine:
                             ])
                             cache_history = CacheHistory(cache=make_empty_cache(model=self.model), token_ids=[]) if cache_history is None else cache_history
                             gen_kwargs['cache_history'] = cache_history
-                            tool_dict = list(filter(lambda x: x['title'] == tool_name, tools))[0]
-                            gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_json=tool_dict)
+                            tool_dict = list(filter(lambda x: get_tool_name(x) == tool_name, tools))[0]
+                            gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_json=convert_tool_to_json_schema(tool_dict))
 
                     # stage 3, generate arugments
                     if tool_stage == 'gen_args':
@@ -564,7 +564,7 @@ class ModelEngine:
                     ])
                     cache_history = CacheHistory(cache=make_empty_cache(model=self.model), token_ids=[]) if cache_history is None else cache_history
                     gen_kwargs['cache_history'] = cache_history
-                    tool_names = [tool['title'] for tool in tools]
+                    tool_names = [get_tool_name(tool) for tool in tools if get_tool_name(tool) is not None]
                     gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_choice=tool_names)
                 else:
                     call_id = None
@@ -586,8 +586,8 @@ class ModelEngine:
                     ])
                     cache_history = CacheHistory(cache=make_empty_cache(model=self.model), token_ids=[]) if cache_history is None else cache_history
                     gen_kwargs['cache_history'] = cache_history
-                    tool_dict = list(filter(lambda x: x['title'] == tool_name, tools))[0]
-                    gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_json=tool_dict)
+                    tool_dict = list(filter(lambda x: get_tool_name(x) == tool_name, tools))[0]
+                    gen_kwargs['logits_processor'] = self._get_outlines_processor(guided_json=convert_tool_to_json_schema(tool_dict))
 
             # stage 3, generate arugments
             if tool_stage == 'gen_args':

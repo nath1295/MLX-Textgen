@@ -20,6 +20,20 @@ def get_chat_prompt(msgs: List[Dict[str, str]], tokenizer: TokenizerWrapper) -> 
         pref = ''.join(diff.split(last_chunk)[:-1]) + last_content.lstrip()
         return woa + pref
     
+def convert_tool_to_json_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
+    params_json = tool.get('function', dict()).get('parameters')
+    if params_json is not None:
+        return params_json
+    else:
+        return tool
+    
+def get_tool_name(tool: Dict[str, Any]) -> str:
+    # OpenAI format
+    name = tool.get('function', dict()).get('name')
+    if name is None:
+        name = tool.get('title')
+    return name
+    
 TOOL_LIST = [{'properties': {'example_arg': {'title': 'Example Arg', 'type': 'string'}}, 'required': ['example_arg'], 'title': 'ExampleTool', 'type': 'function'}]
 TOOL_CALL_LIST = [dict(function=dict(name='ExampleTool', arguments=dict(example_arg='example')))]
 MSG_WITH_TOOL = [
