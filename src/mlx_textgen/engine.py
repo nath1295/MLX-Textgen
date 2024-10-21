@@ -73,7 +73,7 @@ def get_return_dict(
             choices=[
                 dict(
                     index=i, 
-                    finish_reason=(go.finish_reason if go.stop_text != tool_start else 'tool_call_start') if tool_call_id is None else 'tool_call', 
+                    finish_reason=(go.finish_reason if go.stop_text != tool_start else 'tool_call_start') if tool_call_id is None else 'tool_calls', 
                     delta=dict(
                         role="assistant",
                         content=go.text if tool_call_id is None else None,
@@ -120,7 +120,7 @@ def get_return_dict(
                                 }
                             ]
                     ),
-                    finish_reason=(go.finish_reason if go.stop_text != tool_start else 'tool_call_start') if tool_call_id is None else 'tool_call'
+                    finish_reason=(go.finish_reason if go.stop_text != tool_start else 'tool_call_start') if tool_call_id is None else 'tool_calls'
                 )
             for i, go in enumerate(generation_outputs)]
         )
@@ -427,9 +427,9 @@ class ModelEngine:
                         for g in return_dict:
                             index = g['choices'][0]['index']
                             finish_reason = g['choices'][0]['finish_reason']
-                            if finish_reason in ['stop', 'tool_call_start', 'tool_call']:
+                            if finish_reason in ['stop', 'tool_call_start', 'tool_calls']:
                                 stopped.append(index)
-                            if (index not in stopped) or (finish_reason in ['stop', 'tool_call_start', 'tool_call']):
+                            if (index not in stopped) or (finish_reason in ['stop', 'tool_call_start', 'tool_calls']):
                                 if finish_reason not in ['stop', 'length']:
                                     g['choices'][0]['finish_reason'] = None
                                 yield g
@@ -512,7 +512,6 @@ class ModelEngine:
 
                     # stage 3, generate arugments
                     if tool_stage == 'gen_args':
-                        print('generating args...')
                         go = generate(**gen_kwargs)
                         finish_reason = go[0].finish_reason
                         tool_arguments = go[0].text

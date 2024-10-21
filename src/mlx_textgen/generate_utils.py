@@ -339,6 +339,8 @@ def stream_generate(
     texts = [''] * prompt_ids.shape[0]
     is_stopped = [False] * prompt_ids.shape[0]
     try:
+        if verbose:
+            start = None
         for (tokens, logprobs), n in zip(
             generate_step(
                 model=model,
@@ -358,6 +360,8 @@ def stream_generate(
             ),
             range(max_tokens)
         ):
+            if verbose:
+                start = time.perf_counter() if n == 0 else start
             finish_reason = None if (n + 1) != max_tokens else 'length'
             new_tokens = tokens.tolist()
             new_token_str = tokenizer.batch_decode(new_tokens)
@@ -379,6 +383,10 @@ def stream_generate(
                 break
         
     finally:
+        if verbose:
+            end = time.perf_counter() - start
+            num_tokens = (n + 1) * len(prompt_ids)
+            print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
         mx.metal.clear_cache()
     
 def generate(
@@ -452,6 +460,8 @@ def generate(
     is_stopped = [False] * prompt_ids.shape[0]
     stop_texts = [None] * prompt_ids.shape[0]
     try:
+        if verbose:
+            start = None
         for (tokens, logprobs), n in zip(
             generate_step(
                 model=model,
@@ -471,6 +481,8 @@ def generate(
             ),
             range(max_tokens)
         ):
+            if verbose:
+                start = time.perf_counter() if n == 0 else start
             new_tokens = tokens.tolist()
             new_token_str = tokenizer.batch_decode(new_tokens)
             prompt_ids = mx.concat([prompt_ids, tokens], axis=1)
@@ -480,6 +492,10 @@ def generate(
             is_stopped = [s or sc.stop_met for s, sc in zip(is_stopped, stop_conditions)]
             if all(is_stopped):
                 break
+        if verbose:
+            end = time.perf_counter() - start
+            num_tokens = (n + 1) * len(prompt_ids)
+            print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
 
         texts = [t[:-sc.trim_length] if s else t for t, sc, s in zip(texts, stop_conditions, is_stopped)]
         finish_reasons = ['stop' if s else 'length' for s in is_stopped]

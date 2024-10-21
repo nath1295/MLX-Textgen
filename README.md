@@ -31,12 +31,63 @@ You can pass your guided decoding argument `guided_json`, `guided_choice`, `guid
 Batch inference is supported for multiple prompts or multiple generations for a single prompt. Just pass a list of prompts to the `prompt` argument to the `/v1/completions` endpoint or `n=2` (or more than 2) to the `/v1/chat/completions` or `v1/completions` endpoints for batch inferencing.
 
 ### 4. Function calling support
-Function calling with the `/v1/chat/completions` is supported. Simply use the `tools` and `tool_choice` arguments to supply lists of tools. Note that instead of schema suggested by OpenAI, Pydantic models json schemas should be provided as the list of json schemas for `tools` as it is using Outlines to generate the arguments for 100% compliance. There are three modes of using function calling:
+Function calling with the `/v1/chat/completions` is supported. Simply use the `tools` and `tool_choice` arguments to supply lists of tools. There are three modes of using function calling:
 1. `tool_choice="auto"`: The model will decide if tool calling is needed based on the conversation. If a tool is needed, it will pick the appropriate tool and generate the arguments. Otherwise, it will only response with normal text.
 2. `tool_choice="required"`: One of the given tools must be selected by the model. The model will pick the appropriate tool and generate the arguments.
 3. `tool_choice={"type": "function", "function": {"name": "<selected tool name>"}}`: The model will generate the arguments of the selected tools.  
 
-If function calling is triggered, the call arguments will be contained in the `tool_calls` attribute in the `choices` element in the response. The `finish_reason` will be `tool_call`.  
+If function calling is triggered, the call arguments will be contained in the `tool_calls` attribute in the `choices` element in the response. The `finish_reason` will be `tool_calls`.
+```python
+from openai import OpenAI
+
+tools = [{
+  "type": "function",
+  "function": {
+    "name": "get_current_weather",
+    "description": "Get the current weather in a given location",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "default": "celsius"
+        }
+      },
+      "required": ["location"]
+    }
+  }
+}]
+
+client = OpenAI(api_key='Your API Key', base_url='http://localhost:5001/v1/')
+
+output = client.chat.completions.create(
+    model='my_llama_model',
+    messages=[
+        dict(role='user', content='What is the current weather in London?')
+    ],
+    max_tokens=256,
+    tools=tools,
+    tool_choice='auto',
+    tool_choice=dict(type='function', function=dict(name='TextToImageGeneration')),
+    stream=False
+).choices[0].model_dump()
+
+# output: 
+# {'finish_reason': 'tool_calls',
+#  'index': 0,
+#  'logprobs': None,
+#  'message': {'content': None,
+#   'role': 'assistant',
+#   'function_call': None,
+#   'tool_calls': [{'id': 'call_052c8a6b',
+#     'function': {'arguments': '{"location": "London", "unit": "celsius" }',
+#      'name': 'get_current_weather'},
+#     'type': 'function',
+#     'index': 0}]}}
+```
 
 If `tool_choice="none"` is passed, the list of tools provided will be ignored and the model will only generate normal text.
 
@@ -48,9 +99,9 @@ When configuring your model, you can specify the quantisation to increase your i
 
 ```python
 from pydantic import BaseModel
-from openai import Client
+from openai import OpenAI
 
-client = Client(api_key='Your API Key', base_url='http://localhost:5001/v1/')
+client = OpenAI(api_key='Your API Key', base_url='http://localhost:5001/v1/')
 
 class Customer(BaseModel):
     first_name: str
