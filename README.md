@@ -71,7 +71,6 @@ output = client.chat.completions.create(
     max_tokens=256,
     tools=tools,
     tool_choice='auto',
-    tool_choice=dict(type='function', function=dict(name='TextToImageGeneration')),
     stream=False
 ).choices[0].model_dump()
 
