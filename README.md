@@ -32,7 +32,7 @@ pip install mlx-textgen
 You can quickly set up a OpenAI API server with a single command.
 
 ```bash
-mlx_textgen.server --model NousResearch/Hermes-3-Llama-3.1-8B --qunatize q8 --port 5001
+mlx_textgen.server --model NousResearch/Hermes-3-Llama-3.1-8B --qunatize q8 --port 5001 --host 127.0.0.1
 ```
 
 ### 2. Serving a multiple models server
@@ -63,7 +63,7 @@ It will generate a file called `model_config.yaml`. Edit this file for the model
 
 Then start the engine:
 ```bash
-mlx_textgen.server --config-file ./model_config.yaml --port 5001
+mlx_textgen.server --config-file ./model_config.yaml --port 5001 --host 127.0.0.1
 ```
 
 ### 3. More engine arguments

@@ -44,10 +44,13 @@ def get_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--api-key', type=str, default=None, help='API key to access the endpoints. Defaults to None.')
     parser.add_argument('-p', '--port', type=int, 
                         default=5001, help='Port to server the API endpoints.')
+    parser.add_argument('--host', type=str, 
+                        default='127.0.0.1', help='Host to bind the server to. Defaults to "127.0.0.1".')
     return parser
 
 def parse_args() -> Tuple[ModelEngine, int, List[str]]:
     engine_args = get_arg_parser().parse_args()
+    host = engine_args.host
     port = engine_args.port
     api_keys = [engine_args.api_key] if engine_args.api_key is not None else []
     if engine_args.config_file is not None:
@@ -72,7 +75,7 @@ def parse_args() -> Tuple[ModelEngine, int, List[str]]:
         raise ValueError('Either model_path or config_file has to be provide.')
     engine = ModelEngine(models=model_args, prefill_step_size=engine_args.prefill_step_size, 
         token_threshold=engine_args.token_threshold, max_keep=engine_args.max_keep, logger=logger)
-    return engine, port, api_keys
+    return engine, host, port, api_keys
 
 def convert_arguments(new: str, old: str, args: Dict[str, Any]) -> Dict[str, Any]:
     value = args.pop(new, None)
@@ -80,7 +83,7 @@ def convert_arguments(new: str, old: str, args: Dict[str, Any]) -> Dict[str, Any
         args[old] = value
     return args
 
-engine, port, api_keys = parse_args()
+engine, host, port, api_keys = parse_args()
 
 app = FastAPI()
 semaphore = asyncio.Semaphore(1)
@@ -181,7 +184,7 @@ async def get_model(request: Request, model_id: str) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(model_dict[model_id]))
 
 def main():
-    uvicorn.run(app, port=port)
+    uvicorn.run(app, port=port, host=host)
 
 if __name__ == '__main__':
     main()
