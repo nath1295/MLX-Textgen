@@ -18,8 +18,8 @@ It is built with:
 3. [FastAPI](https://github.com/fastapi/fastapi)
 
 ## Updates
-**2024-10-20** - Batch inference and function calling supported. Breaking changes in the save format for the KV caches. Run `mlx_textgen.clear_cache` after updating to avoid issues.
-**2024-10-07** - Guided decoding is supported with [Outlines](https://github.com/dottxt-ai/outlines) backend.
+- **2024-10-20:** Batch inference and function calling supported. Breaking changes in the save format for the KV caches. Run `mlx_textgen.clear_cache` after updating to avoid issues.
+- **2024-10-07:** Guided decoding is supported with [Outlines](https://github.com/dottxt-ai/outlines) backend.
 
 ## Installing MLX-Textgen
 MLX-textgen can be easily installed with `pip`:
