@@ -7,7 +7,7 @@ from .model_utils import PACKAGE_NAME, ModelConfig
 import asyncio
 import argparse
 import logging, json, warnings, yaml
-from typing import Union, Dict, Any, List, Tuple
+from typing import Union, Dict, Any, List, Tuple, Callable, Optional
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(format='[(%(levelname)s) %(asctime)s]: %(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
@@ -77,10 +77,10 @@ def parse_args() -> Tuple[ModelEngine, int, List[str]]:
         token_threshold=engine_args.token_threshold, max_keep=engine_args.max_keep, logger=logger)
     return engine, host, port, api_keys
 
-def convert_arguments(new: str, old: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def convert_arguments(new: str, old: str, args: Dict[str, Any], transform_fn: Optional[Callable] = None) -> Dict[str, Any]:
     value = args.pop(new, None)
     if value is not None:
-        args[old] = value
+        args[old] = value if transform_fn is None else transform_fn(value)
     return args
 
 engine, host, port, api_keys = parse_args()
@@ -130,6 +130,7 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     stream = content.get('stream', False)
     content = convert_arguments('max_completion_tokens', 'max_tokens', content)
     content = convert_arguments('frequency_penalty', 'repetition_penalty', content)
+    content = convert_arguments('response_format', 'guided_json', content, transform_fn=lambda x: x.get('json_schema', dict()).get('schema'))
     if isinstance(content.get('stop', None), str):
         content['stop'] = [content['stop']]
     args_model = TextCompletionInput(**content)
@@ -154,6 +155,7 @@ async def completions(request: Request) -> Union[StreamingResponse, JSONResponse
     stream = content.get('stream', False)
     content = convert_arguments('max_completion_tokens', 'max_tokens', content)
     content = convert_arguments('frequency_penalty', 'repetition_penalty', content)
+    content = convert_arguments('response_format', 'guided_json', content, transform_fn=lambda x: x.get('json_schema', dict()).get('schema'))
     if isinstance(content.get('stop', None), str):
         content['stop'] = [content['stop']]
     args_model = ChatCompletionInput(**content)

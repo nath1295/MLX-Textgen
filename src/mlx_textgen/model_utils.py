@@ -1,6 +1,6 @@
 import os
 from mlx_lm.utils import get_model_path, load_config, load_model, convert
-from mlx_lm.tokenizer_utils import load_tokenizer, TokenizerWrapper
+from .tokenizer_utils import load_tokenizer, TokenizerWrapper
 import mlx.nn as nn
 from typing import Literal, Optional, Dict, Any, Tuple, NamedTuple
 from pathlib import Path
