@@ -164,12 +164,12 @@ class BPEDetokenizer:
         self.texts = [] if self.num_seqs is None else [''] * self.num_seqs
         self.tokens = [] if self.num_seqs is None else [[]] * self.num_seqs
 
-    def _maybe_trim_space(self, current_text):
+    def _maybe_trim_space(self, current_text, i):
         if len(current_text) == 0:
             return current_text
         elif current_text[0] != " ":
             return current_text
-        elif not self.text:
+        elif not self.texts[i]:
             return current_text[1:]
         elif self.clean_spaces and current_text[1:].startswith(self._space_matches):
             return current_text[1:]
@@ -186,7 +186,7 @@ class BPEDetokenizer:
                 current_text = bytearray(
                     self._byte_decoder[c] for c in self._unflushed[i]
                 ).decode("utf-8")
-                self.texts[i] += self._maybe_trim_space(current_text)
+                self.texts[i] += self._maybe_trim_space(current_text, i)
                 self._unflushed[i] = v
             else:
                 self._unflushed[i] += v
@@ -196,7 +196,7 @@ class BPEDetokenizer:
             current_text = bytearray(self._byte_decoder[c] for c in self._unflushed[i]).decode(
                 "utf-8"
             )
-            self.texts[i] += self._maybe_trim_space(current_text)
+            self.texts[i] += self._maybe_trim_space(current_text, i)
             self._unflushed[i] = ""
 
     @property
@@ -329,8 +329,8 @@ def load_tokenizer(model_path, tokenizer_config_extra={}):
             detokenizer_class = SPMDetokenizer
         elif _is_spm_decoder_no_space(tokenizer_content["decoder"]):
             detokenizer_class = partial(SPMDetokenizer, trim_space=False)
-        elif _is_bpe_decoder(tokenizer_content["decoder"]):
-            detokenizer_class = BPEDetokenizer
+        # elif _is_bpe_decoder(tokenizer_content["decoder"]):
+        #     detokenizer_class = BPEDetokenizer
 
     return TokenizerWrapper(
         AutoTokenizer.from_pretrained(model_path, **tokenizer_config_extra),

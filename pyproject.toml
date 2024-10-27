@@ -1,6 +1,6 @@
 [project]
 name = "mlx-textgen"
-description = "A python package for serving LLM on OpenAI-compatible API endpoints with prompt caching using MLX."
+description = "An OpenAI-compatible API LLM engine with smart prompt caching, batch processing, structured output with guided decoding, and function calling for all models using MLX."
 dynamic = ["version"]
 
 authors = [

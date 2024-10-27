@@ -3,7 +3,7 @@
 [![PyPI - License](https://img.shields.io/pypi/l/mlx-textgen)](https://pypi.org/project/mlx-textgen/)
 [![GitHub Repo stars](https://img.shields.io/github/stars/nath1295/mlx-textgen)](https://pypi.org/project/mlx-textgen/)
 
-## A OpenAI-compatible API LLM engine with smart prompt caching, batch processing, structured output with guided decoding, and function calling for all models using MLX  
+## An OpenAI-compatible API LLM engine with smart prompt caching, batch processing, structured output with guided decoding, and function calling for all models using MLX  
 
 MLX-Textgen is a light-weight LLM serving engine that utilize MLX and a smart KV cache management system to make your LLM generation more seamless on your Apple silicon machine. It features:
 - **Multiple KV-cache slots to reduce the needs of prompt processing**
