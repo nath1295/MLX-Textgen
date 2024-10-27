@@ -45,7 +45,7 @@ def stopping_criteria(
         StopCondition: A status class stating whether the generation should stop and the length of text to trim.
     """
     return next(
-        (StopCondition(stop_met=True, trim_length=length + len(text.split(stop)[-1]), stop_text=stop)
+        (StopCondition(stop_met=True, trim_length=len(text) - len(text.split(stop)[0]), stop_text=stop)
         for stop, length in stop_tuple if stop in text), StopCondition(stop_met=False, trim_length=0, stop_text=None)
     )
 
@@ -338,7 +338,8 @@ def stream_generate(
 
     texts = [''] * prompt_ids.shape[0]
     is_stopped = [False] * prompt_ids.shape[0]
-    detokenizers = tokenizer.get_detokenizers(prompt_ids.shape[0])
+    detokenizer = tokenizer._detokenizer
+    detokenizer.reset()
     try:
         if verbose:
             start = None
@@ -365,11 +366,11 @@ def stream_generate(
                 start = time.perf_counter() if n == 0 else start
             finish_reason = None if (n + 1) != max_tokens else 'length'
             new_tokens = tokens.tolist()
-            [dt.add_token(t[0]) for dt, t in zip(detokenizers, new_tokens)]
+            detokenizer.add_tokens(new_tokens)
             # finalize for last token
             if (n + 1) == max_tokens:
-                [dt.finalize() for dt in detokenizers]
-            new_token_str = [dt.last_segment for dt in detokenizers]
+                detokenizer.finalize()
+            new_token_str = detokenizer.last_segments
             prompt_ids = mx.concat([prompt_ids, tokens], axis=1)
             texts = [t[0] + t[1] for t in zip(texts, new_token_str)]
             stop_conditions = [stopping_criteria(t, stop_tuple=stop_tuple) for t in texts]
@@ -392,7 +393,6 @@ def stream_generate(
             end = time.perf_counter() - start
             num_tokens = (n + 1) * len(prompt_ids)
             print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
-        del detokenizers
         mx.metal.clear_cache()
     
 def generate(
@@ -465,7 +465,8 @@ def generate(
     texts = [''] * prompt_ids.shape[0]
     is_stopped = [False] * prompt_ids.shape[0]
     stop_texts = [None] * prompt_ids.shape[0]
-    detokenizers = tokenizer.get_detokenizers(prompt_ids.shape[0])
+    detokenizer = tokenizer._detokenizer
+    detokenizer.reset()
     try:
         if verbose:
             start = None
@@ -491,11 +492,11 @@ def generate(
             if verbose:
                 start = time.perf_counter() if n == 0 else start
             new_tokens = tokens.tolist()
-            [dt.add_token(t[0]) for dt, t in zip(detokenizers, new_tokens)]
+            detokenizer.add_tokens(new_tokens)
             # finalize for last token
             if (n + 1) == max_tokens:
-                [dt.finalize() for dt in detokenizers]
-            new_token_str = [dt.last_segment for dt in detokenizers]
+                detokenizer.finalize()
+            new_token_str = detokenizer.last_segments
             prompt_ids = mx.concat([prompt_ids, tokens], axis=1)
             texts = [t[0] + t[1] if not t[2] else t[0] for t in zip(texts, new_token_str, is_stopped)]
             stop_conditions = [stopping_criteria(t, stop_tuple=stop_tuple) for t in texts]
@@ -515,7 +516,6 @@ def generate(
         return gen_outputs
         
     finally:
-        del detokenizers
         mx.metal.clear_cache()
 
 
