@@ -1,48 +1,205 @@
-from mlx_lm.models.cache import KVCache, RotatingKVCache
+# Adapted from mlx-lm
+
 import mlx.nn as nn
 import mlx.core as mx
-from mlx.utils import tree_flatten, tree_unflatten
+from mlx.utils import tree_flatten, tree_unflatten, tree_map
 from typing import List, Optional, Any, Dict, Union, Tuple, NamedTuple
+
+class _BaseCache:
+    @property
+    def state(self):
+        return []
+
+    @state.setter
+    def state(self, v):
+        if v is not None and v:
+            raise ValueError("This cache has no state but a state was set.")
+
+    @property
+    def meta_state(self):
+        return ""
+
+    @meta_state.setter
+    def meta_state(self, v):
+        if v is not None and v:
+            raise ValueError("This cache has no meta_state but a meta_state was set.")
+
+    def is_trimmable(self):
+        return False
+
+
+class QuantizedKVCache(_BaseCache):
+    def __init__(self, group_size: int = 64, bits: int = 8):
+        self.keys = None
+        self.values = None
+        self.offset = 0
+        self.step = 256
+        self.group_size = group_size
+        self.bits = bits
+
+    def update_and_fetch(self, keys, values):
+        B, n_kv_heads, num_steps, k_head_dim = keys.shape
+        v_head_dim = values.shape[-1]
+        prev = self.offset
+
+        if self.keys is None or (prev + num_steps) > self.keys[0].shape[-2]:
+            el_per_int = 8 * mx.uint32.size // self.bits
+            new_steps = (self.step + num_steps - 1) // self.step * self.step
+            shape = (B, n_kv_heads, new_steps)
+
+            def init_quant(dim):
+                return (
+                    mx.zeros((*shape, dim // el_per_int), dtype=mx.uint32),
+                    mx.zeros((*shape, dim // self.group_size), dtype=keys.dtype),
+                    mx.zeros((*shape, dim // self.group_size), dtype=keys.dtype),
+                )
+
+            def expand_quant(x):
+                new_x = mx.zeros((*shape, x.shape[-1]), dtype=x.dtype)
+                return mx.concatenate([x, new_x], axis=-2)
+
+            if self.keys is not None:
+                if prev % self.step != 0:
+                    self.keys, self.values = tree_map(
+                        lambda x: x[..., :prev, :], (self.keys, self.values)
+                    )
+
+                self.keys, self.values = tree_map(
+                    expand_quant, (self.keys, self.values)
+                )
+            else:
+                self.keys, self.values = init_quant(k_head_dim), init_quant(v_head_dim)
+
+        self.offset += num_steps
+
+        keys = mx.quantize(keys, group_size=self.group_size, bits=self.bits)
+        values = mx.quantize(values, group_size=self.group_size, bits=self.bits)
+        for i in range(len(self.keys)):
+            self.keys[i][..., prev : self.offset, :] = keys[i]
+            self.values[i][..., prev : self.offset, :] = values[i]
+
+        return tree_map(lambda x: x[..., : self.offset, :], (self.keys, self.values))
+
+    @property
+    def state(self):
+        if self.offset == self.keys[0].shape[2]:
+            return self.keys, self.values
+        else:
+            return tree_map(
+                lambda x: x[..., : self.offset, :], (self.keys, self.values)
+            )
+
+    @state.setter
+    def state(self, v):
+        self.keys, self.values = v
+
+    @property
+    def meta_state(self):
+        return tuple(map(str, (self.step, self.offset, self.group_size, self.bits)))
+
+    @meta_state.setter
+    def meta_state(self, v):
+        self.step, self.offset, self.group_size, self.bits = map(int, v)
+
+    def is_trimmable(self):
+        return True
+
+    def trim(self, n):
+        n = min(self.offset, n)
+        self.offset -= n
+        return n
+
+
+class KVCache(_BaseCache):
+    def __init__(self):
+        self.keys = None
+        self.values = None
+        self.offset = 0
+        self.step = 256
+
+    def update_and_fetch(self, keys, values):
+        prev = self.offset
+        if self.keys is None or (prev + keys.shape[2]) > self.keys.shape[2]:
+            B, n_kv_heads, _, k_head_dim = keys.shape
+            v_head_dim = values.shape[3]
+            n_steps = (self.step + keys.shape[2] - 1) // self.step
+            k_shape = (B, n_kv_heads, n_steps * self.step, k_head_dim)
+            v_shape = (B, n_kv_heads, n_steps * self.step, v_head_dim)
+            new_k = mx.zeros(k_shape, keys.dtype)
+            new_v = mx.zeros(v_shape, values.dtype)
+            if self.keys is not None:
+                if prev % self.step != 0:
+                    self.keys = self.keys[..., :prev, :]
+                    self.values = self.values[..., :prev, :]
+                self.keys = mx.concatenate([self.keys, new_k], axis=2)
+                self.values = mx.concatenate([self.values, new_v], axis=2)
+            else:
+                self.keys, self.values = new_k, new_v
+
+        self.offset += keys.shape[2]
+        self.keys[..., prev : self.offset, :] = keys
+        self.values[..., prev : self.offset, :] = values
+        return self.keys[..., : self.offset, :], self.values[..., : self.offset, :]
+
+    @property
+    def state(self):
+        if self.offset == self.keys.shape[2]:
+            return self.keys, self.values
+        else:
+            return (
+                self.keys[..., : self.offset, :],
+                self.values[..., : self.offset, :],
+            )
+
+    @state.setter
+    def state(self, v):
+        self.keys, self.values = v
+        self.offset = self.keys.shape[2]
+
+    def is_trimmable(self):
+        return True
+
+    def trim(self, n):
+        n = min(self.offset, n)
+        self.offset -= n
+        return n
+
+    def to_quantized(self, group_size: int = 64, bits: int = 4) -> QuantizedKVCache:
+        quant_cache = QuantizedKVCache(group_size=group_size, bits=bits)
+        quant_cache.offset = self.offset
+        if self.keys is not None:
+            quant_cache.keys = mx.quantize(self.keys, group_size=group_size, bits=bits)
+            quant_cache.values = mx.quantize(
+                self.values, group_size=group_size, bits=bits
+            )
+        return quant_cache
+
 
 class CacheHistory:
     def __init__(self,
-            cache: List[Union[KVCache, RotatingKVCache]],
+            cache: List[Union[KVCache, QuantizedKVCache]],
             token_ids: List[List[int]]
         ) -> None:
-        self.cache: List[Union[KVCache, RotatingKVCache]] = cache
+        self.cache: List[Union[KVCache, QuantizedKVCache]] = cache
         self.token_ids: List[List[int]] = token_ids
 
 
-def make_empty_cache(model: nn.Module, max_kv_size: Optional[int] = None) -> List[Union[KVCache, RotatingKVCache]]:
+def make_empty_cache(model: nn.Module) -> List[Union[KVCache, QuantizedKVCache]]:
     """
-    Constructs the model's cache for use during generation.
+    Constructs an empty cache for use during generation.
 
-    This function defers the cache construction to the model if it has a
-    ``make_cache`` method. If the model does not have this method, a default
-    KV cache is created. If a maximum key-value size is specified and the model
-    does not have a ``make_cache`` method, a ``RotatingKVCache`` is used with
-    the specified maximum size.
+    This function creates an empty cache for a given language model. If the model
+    has a ``make_cache`` method, it defers the cache construction to the model.
+    Otherwise, it creates a default KV cache.
     Args:
         model (nn.Module): The language model.
-        max_kv_size (Optional[int]): If provided and the model does not have a
-            ``make_cache`` method, a ``RotatingKVCache`` is used with a maximum
-            size of ``max_kv_size``.
-
     Returns:
-        List[Union[KVCache, RotatingKVCache]]: The constructed cache.
+        List[Union[KVCache, QuantizedKVCache]]: The constructed empty cache.
     """
-    if hasattr(model, "make_cache"):
-        return model.make_cache()
-
     num_layers = len(model.layers)
-    if max_kv_size is not None:
-        return [
-            RotatingKVCache(max_size=max_kv_size, keep=4) for _ in range(num_layers)
-        ]
-    else:
-        return [KVCache() for _ in range(num_layers)]
+    return [KVCache() for _ in range(num_layers)]
     
-def create_cache_dict(cache: List[Union[KVCache, RotatingKVCache]]) -> Dict[str, mx.array]:
+def create_cache_dict(cache: List[Union[KVCache, QuantizedKVCache]]) -> Dict[str, mx.array]:
     """Create a dictionary of prompt cache for saving or further manipuation. 
 
     Args:
@@ -56,13 +213,19 @@ def create_cache_dict(cache: List[Union[KVCache, RotatingKVCache]]) -> Dict[str,
         cache_dict = dict(tree_flatten([c.state for c in cache]))
         return cache_dict
     
-def save_cache(cache: List[Union[KVCache, RotatingKVCache]], file: str, metadata: Optional[Dict[str, str]] = None) -> None:
+def save_cache(cache: List[Union[KVCache, QuantizedKVCache]], file: str, metadata: Optional[Dict[str, str]] = None) -> None:
     """Save cache as a safetensors file.
 
+    This function saves a given cache as a safetensors file. The cache is first
+    converted to a dictionary of tensors using the `create_cache_dict` function.
+    The resulting dictionary is then saved to the specified file using the
+    `safetensors.save_file` function. If metadata is provided, it is included in
+    the saved file.
+
     Args:
-        cache (List[Union[KVCache, RotatingKVCache]]): Prompt cache to save.
-        file (str): File the cache should be saved.
-        metadata (Optional[Dict[str, str]], optional): Metadata for the prompt cache. Defaults to None.
+        cache (List[Union[KVCache, QuantizedKVCache]]): The cache to save.
+        file (str): The file path to save the cache to.
+        metadata (Optional[Dict[str, str]], optional): Metadata to include in the saved file. Defaults to None.
     """
     cache_dict = create_cache_dict(cache=cache)
     if cache_dict:
@@ -70,32 +233,35 @@ def save_cache(cache: List[Union[KVCache, RotatingKVCache]], file: str, metadata
     del cache_dict
     mx.metal.clear_cache()
 
-def load_cache(file: str, max_kv_size: Optional[int] = None) -> Tuple[List[Union[KVCache, RotatingKVCache]], Dict[str, str]]:
+def load_cache(file: str) -> Tuple[List[Union[KVCache, QuantizedKVCache]], Dict[str, str]]:
     """Load a cache file.
 
+    This function loads a cache file saved as a safetensors file. It returns the loaded cache
+    and its metadata.
+
     Args:
-        file (str): Safetensors file to load.
-        max_kv_size (Optional[int], optional): Max number of tokens being kept in the cache. If None given, there is no limitation. Defaults to None.
+        file (str): The path to the safetensors file containing the cache.
 
     Returns:
-        Tuple[List[Union[KVCache, RotatingKVCache]], Dict[str, str]]: Cache and it's metadata.
+        Tuple[List[Union[KVCache, QuantizedKVCache]], Dict[str, str]]: A tuple containing the loaded cache
+            and its metadata.
     """
     cache_dict, metadata = mx.load(file, return_metadata=True)
     cache_list = tree_unflatten(list(cache_dict.items()))
     cache = []
     for i, (key, value) in enumerate(cache_list):
-        cache.append(RotatingKVCache(max_size=max_kv_size, keep=4) if max_kv_size else KVCache())
+        cache.append(KVCache())
         cache[i].update_and_fetch(key, value)
     mx.eval([c.state for c in cache])
     del cache_dict
     mx.metal.clear_cache()
     return cache, metadata
 
-def split_cache(cache: List[Union[KVCache, RotatingKVCache]]) -> List[List[KVCache]]:
+def split_cache(cache: List[Union[KVCache, QuantizedKVCache]]) -> List[List[KVCache]]:
     """Split the cache into multiple smaller caches. Each smaller cache will contain a subset of the original cache's data.
 
     Args:
-        cache (List[Union[KVCache, RotatingKVCache]]): The cache to be split.
+        cache (List[Union[KVCache, QuantizedKVCache]]): The cache to be split.
 
     Returns:
         List[List[KVCache]]: A list of smaller caches.
@@ -142,7 +308,7 @@ def trim_cache(cache: List[KVCache], offset: int, trim_suffix: int = 0) -> List[
 
 
 def select_from_cache(
-        cache: List[Union[KVCache, RotatingKVCache]],
+        cache: List[Union[KVCache, QuantizedKVCache]],
         prompt_index: int = 0,
         select_len: Optional[int] = None,
         start_from: int = 0
@@ -150,7 +316,7 @@ def select_from_cache(
     """Get the kv cache tensors of a specific sequence in a cache with multiple prompt cache sequences.
 
     Args:
-        cache (List[Union[KVCache, RotatingKVCache]]): Cache object.
+        cache (List[Union[KVCache, QuantizedKVCache]]): Cache object.
         prompt_index (int, optional): The index of the sequence to get. Defaults to 0.
         select_len (Optional[int], optional): Length of the seqence to get. Defaults to None.
         start_from (int, optional): Starting index of the sequence. Defaults to 0.

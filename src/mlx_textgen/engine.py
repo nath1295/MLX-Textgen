@@ -1,6 +1,7 @@
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from mlx.nn import Module
 from datetime import datetime as dt
+import time
 import uuid
 import mlx.core as mx
 from .cache_utils import CacheHistory, make_empty_cache
@@ -249,6 +250,10 @@ class ModelEngine:
         mx.metal.clear_cache()
         self.models[model_name] = model_config
 
+    def _log(self, msg: str) -> None:
+        if self.logger:
+            self.logger.info(msg)
+
     def _switch_model(self, model_name: str) -> None:
         """Switch the model in ram to the given model.
 
@@ -258,6 +263,7 @@ class ModelEngine:
         if model_name not in self.models.keys():
             raise ValueError(f'No model named "{model_name}".')
         if model_name != self.current_model:
+            start = time.perf_counter()
             del self.model, self.tokenizer, self.cache_manager, self.outlines_tokenizer
             mx.metal.clear_cache()
             model_args = self.models[model_name]._asdict()
@@ -275,6 +281,8 @@ class ModelEngine:
             self.chat_template = ChatTemplate(tokenizer=self.tokenizer._tokenizer)
             if OUTLINE_INSTALLED:
                 self.outlines_tokenizer = TransformerTokenizer(tokenizer=self.tokenizer._tokenizer)
+            end = time.perf_counter()
+            self._log(f'Switch to model "{model_name}"; time taken: {end - start:.4f}s')
 
     def _get_outlines_processor(self,
             guided_json: Optional[Union[str, dict]] = None,
