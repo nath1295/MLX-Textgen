@@ -1,8 +1,8 @@
 # adapted from mlx-lm
 import json
 from functools import partial
-from typing import List, Optional
-
+from typing import List, Optional, Dict, Any
+from logging import Logger
 from transformers import AutoTokenizer, PreTrainedTokenizer
 from huggingface_hub import hf_hub_download
 
@@ -194,13 +194,14 @@ def _is_bpe_decoder(decoder):
     return isinstance(decoder, dict) and decoder.get("type", None) == "ByteLevel"
 
 
-def load_tokenizer(model_path, tokenizer_config_extra={}):
+def load_tokenizer(model_path, tokenizer_config_extra: Optional[Dict[str, Any]] = None, logger: Optional[Logger] = None):
     """Load a huggingface tokenizer and try to infer the type of streaming
     detokenizer to use.
 
     Note, to use a fast streaming tokenizer, pass a local file path rather than
     a Hugging Face repo ID.
     """
+    tokenizer_config_extra = dict() if tokenizer_config_extra is None else tokenizer_config_extra
     detokenizer_class = NaiveDetokenizer
 
     tokenizer_file = model_path / "tokenizer.json"
@@ -210,14 +211,15 @@ def load_tokenizer(model_path, tokenizer_config_extra={}):
         tokenizer_content = json.load(fid)
     if "decoder" in tokenizer_content:
         if _is_spm_decoder(tokenizer_content["decoder"]):
-            print('Using SPM decoder.')
+            if logger:
+                logger.info('Using SPM decoder.')
             detokenizer_class = SPMDetokenizer
         elif _is_spm_decoder_no_space(tokenizer_content["decoder"]):
-            print('Using SPM decoder with trim_space=False.')
+            if logger:
+                logger.info('Using SPM decoder with trim_space=False.')
             detokenizer_class = partial(SPMDetokenizer, trim_space=False)
-        elif _is_bpe_decoder(tokenizer_content["decoder"]):
-            print('BPE decoder falling back to Naive decoder.')
-        #     detokenizer_class = BPEDetokenizer
+        elif logger:
+            logger.info('Using Naive decoder.')
 
     return TokenizerWrapper(
         AutoTokenizer.from_pretrained(model_path, **tokenizer_config_extra),

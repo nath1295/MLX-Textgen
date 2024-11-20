@@ -5,6 +5,7 @@ import time
 from .cache_utils import CacheHistory, make_empty_cache
 from .sampling_utils import categorical_sampling, min_p_sampling, top_p_sampling
 from typing import Optional, Literal, List, NamedTuple, Tuple, Generator, Union, Dict, Any
+from logging import Logger
 import warnings
 try:
     from outlines.processors.base_logits_processor import OutlinesLogitsProcessor
@@ -128,6 +129,7 @@ def generate_step(
         logits_processor: Optional[OutlinesLogitsProcessor] = None,
         seed: Optional[int] = None,
         verbose: bool = True,
+        logger: Optional[Logger] = None
     ) -> Generator[Tuple[mx.array, mx.array], None, None]:
     """
     Generate text tokens step by step using a language model.
@@ -241,7 +243,10 @@ def generate_step(
     pp_end = time.perf_counter() - pp_start
     if verbose:
         num_tokens = unprocessed_ids.shape[1] * num_prompts
-        print(f'Prompt preprocessing time for {num_tokens} tokens: {pp_end:.4}s ({num_tokens/pp_end:.4f} tok/sec)')
+        if logger:
+            logger.info(f'Prompt preprocessing time for {num_tokens} tokens: {pp_end:.4}s ({num_tokens/pp_end:.4f} tok/sec)')
+        else:
+            print(f'Prompt preprocessing time for {num_tokens} tokens: {pp_end:.4}s ({num_tokens/pp_end:.4f} tok/sec)')
     mx.async_eval(y)
 
     # Generating tokens
@@ -271,6 +276,7 @@ def stream_generate(
         logits_processor: Optional[OutlinesLogitsProcessor] = None,
         seed: Optional[int] = None,
         verbose: bool = True,
+        logger: Optional[Logger] = None
     ) -> Generator[List[GenerationOutput], None, None]:
     """
     Stream generate text tokens using a language model.
@@ -358,7 +364,8 @@ def stream_generate(
                 logit_bias=logit_bias,
                 logits_processor=logits_processor,
                 seed=seed,
-                verbose=verbose
+                verbose=verbose,
+                logger=logger
             ),
             range(max_tokens)
         ):
@@ -392,7 +399,10 @@ def stream_generate(
         if verbose:
             end = time.perf_counter() - start
             num_tokens = (n + 1) * len(prompt_ids)
-            print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
+            if logger:
+                logger.info(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
+            else:
+                print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
         mx.metal.clear_cache()
     
 def generate(
@@ -413,6 +423,7 @@ def generate(
         logits_processor: Optional[OutlinesLogitsProcessor] = None,
         seed: Optional[int] = None,
         verbose: bool = True,
+        logger: Optional[Logger] = None
     ) -> List[GenerationOutput]:
     """
     Generate text tokens using a language model.
@@ -507,7 +518,10 @@ def generate(
         if verbose:
             end = time.perf_counter() - start
             num_tokens = (n + 1) * len(prompt_ids)
-            print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
+            if logger:
+                logger.info(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
+            else:
+                print(f'Number of tokens generated: {num_tokens}; Generation time: {end}s ({(num_tokens / end):.4f} tok/sec)')
 
         texts = [t[:-sc.trim_length] if s else t for t, sc, s in zip(texts, stop_conditions, is_stopped)]
         finish_reasons = ['stop' if s else 'length' for s in is_stopped]

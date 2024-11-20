@@ -1,6 +1,7 @@
 import os
 from mlx_lm.utils import get_model_path, load_config, load_model, convert
 from .tokenizer_utils import load_tokenizer, TokenizerWrapper
+from logging import Logger
 import mlx.nn as nn
 from typing import Literal, Optional, Dict, Any, Tuple, NamedTuple
 from pathlib import Path
@@ -85,7 +86,8 @@ def get_model_and_tokenizer(
         revision: Optional[str] = None,
         adapter_path: Optional[str] = None,
         model_config: Optional[Dict[str, Any]] = None,
-        tokenizer_config: Optional[Dict[str, Any]] = None
+        tokenizer_config: Optional[Dict[str, Any]] = None,
+        logger: Optional[Logger] = None
     ) -> Tuple[nn.Module, TokenizerWrapper]:
     """Load the llm model and it's tokenizer.
 
@@ -105,7 +107,7 @@ def get_model_and_tokenizer(
     tokenizer_config = {} if tokenizer_config is None else tokenizer_config
     model_config = {} if model_config is None else model_config
     model = load_model(model_path=mlx_path, model_config=model_config)
-    tokenizer = load_tokenizer(model_path=mlx_path if tokenizer_id_or_path is None else Path(tokenizer_id_or_path), tokenizer_config_extra=tokenizer_config)
+    tokenizer = load_tokenizer(model_path=mlx_path if tokenizer_id_or_path is None else Path(tokenizer_id_or_path), tokenizer_config_extra=tokenizer_config, logger=logger)
     return model, tokenizer
 
 class ModelConfig(NamedTuple):

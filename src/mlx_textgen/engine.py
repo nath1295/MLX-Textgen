@@ -194,7 +194,8 @@ class ModelEngine:
             prefill_step_size: int = 512,
             token_threshold: int = 20,
             save_similarity_threshold: float = 0.9,
-            max_keep: int = 50, 
+            max_keep: int = 50,
+            verbose: bool = True,
             logger: Optional[Logger] = None
         ) -> None:
         """Initialising the engine.
@@ -211,6 +212,7 @@ class ModelEngine:
         self.token_threshold = token_threshold
         self.save_sim_threshold = save_similarity_threshold
         self.max_keep = max_keep
+        self.verbose = verbose
         self.logger = logger
         self.models: Dict[str, ModelConfig] = dict()
         self.model: Optional[Module] = None
@@ -411,7 +413,8 @@ class ModelEngine:
             logit_bias=logit_bias,
             seed=seed,
             logits_processor=logits_processor,
-            verbose=True
+            verbose=self.verbose,
+            logger=self.logger
         )
         cpl_id = uuid.uuid4().hex
         created = int(dt.now().timestamp())
