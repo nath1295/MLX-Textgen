@@ -488,7 +488,7 @@ class ModelEngine:
                                 tool_stage = 'pick_tool'
                                 g['choices'][0]['finish_reason'] = None
                                 # update the generation kwargs here
-                                gen_kwargs['prompt'][0] += text + self.chat_template.tool_start + '{"function": {' + '"name": "'
+                                gen_kwargs['prompt'][0] += text + self.chat_template.tool_start + '{"name": "'
                                 token_ids=[go[0].token_ids.tolist()]
                                 self.cache_manager.save_cache(cache=CacheHistory(cache=cache_history.cache, token_ids=token_ids))
                                 mx.metal.clear_cache()
@@ -565,7 +565,7 @@ class ModelEngine:
                 if (finish_reason == 'stop') and (go[0].stop_text == self.chat_template.tool_start):
                     tool_stage = 'pick_tool'
                     # update the generation kwargs here
-                    gen_kwargs['prompt'][0] += text + self.chat_template.tool_start + '{"function": {' + '"name": "'
+                    gen_kwargs['prompt'][0] += text + self.chat_template.tool_start + '{"name": "'
                     token_ids=[go[0].token_ids.tolist()]
                     self.cache_manager.save_cache(cache=CacheHistory(cache=cache_history.cache, token_ids=token_ids))
                     mx.metal.clear_cache()

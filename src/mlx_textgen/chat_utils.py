@@ -23,6 +23,8 @@ def get_chat_prompt(msgs: List[Dict[str, str]], tokenizer: TokenizerWrapper) -> 
 def convert_tool_to_json_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
     params_json = tool.get('function', dict()).get('parameters')
     if params_json is not None:
+        if 'title' not in params_json.keys():
+            params_json['title'] = tool['function']['name']
         return params_json
     else:
         return tool
@@ -59,7 +61,7 @@ For each function call, return a json object with function name and arguments wi
 
 class ToolCallContent(BaseModel):
     name: str
-    arguments: Dict[str, Any]
+    arguments: str
 
 class ToolCall(BaseModel):
     function: ToolCallContent
@@ -67,7 +69,7 @@ class ToolCall(BaseModel):
 class ChatMessage(BaseModel):
     role: Literal['system', 'user', 'assistant', 'tool']
     content: Optional[Any] = None
-    tool_call: Optional[List[ToolCall]] = None
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class ChatTemplate:
@@ -85,6 +87,18 @@ class ChatTemplate:
                 self._support_tool_call = False
         return self._support_tool_call
     
+    @property
+    def support_system(self) -> bool:
+        if not hasattr(self, '_support_system'):
+            try:
+                system = 'Test system message, see if exist.'
+                messages = [dict(role='system', content=system), dict(role='user', content='Hi there')]
+                prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+                self._support_system = system in prompt
+            except:
+                self._support_system = False
+        return self._support_system
+
     @property
     def allow_multiple_assistant(self) -> bool:
         if not hasattr(self, '_allow_multiple_assistant'):
@@ -116,41 +130,57 @@ class ChatTemplate:
         return messages
     
     def _validate_message_seq(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        def format_tool_call(tc):
+            call = tc['function']
+            try:
+                args = json.loads(call['arguments'])
+            except:
+                args = call['arguments']
+            call['arguments'] = args
+            return json.dumps(call)
         if self.allow_multiple_assistant and self.support_tool_call:
-            return messages
+            new_messages = []
+            for msg in messages:
+                if msg.get('tool_calls') is not None:
+                    msg['tool_calls'] = [format_tool_call(tc) for tc in msg['tool_calls']]
+                    new_messages.append(msg)
+                else:
+                    new_messages.append(msg)
         elif self.allow_multiple_assistant and (not self.support_tool_call):
             new_messages = []
             for msg in messages:
-                if (msg['role'] == 'assistant') and msg.get('tool_call'):
-                    tool_call = '\n'.join(['<tool_call>\n' + json.dumps(tc) + '\n</tool_call>' for tc in msg['tool_call']])
-                    new_messages.append(dict(role='assistant', content=msg.get('content', '') + tool_call))
+                if (msg['role'] == 'assistant') and msg.get('tool_calls'):
+                    tool_call = '\n'.join(['<tool_call>\n' + format_tool_call(tc) + '\n</tool_call>' for tc in msg['tool_calls']])
+                    content = '' if msg.get('content') is None else msg.get('content')
+                    new_messages.append(dict(role='assistant', content=content + tool_call))
                 elif (msg['role'] == 'tool'):
-                    content = msg.get('content', '')
+                    content = '' if msg.get('content') is None else msg.get('content')
                     content = content if isinstance(content, str) else json.dumps(content)
                     content = '<tool_response>\n' + content + '\n</tool_response>'
                     new_messages.append(dict(role='user', content=content))
                 else:
                     new_messages.append(msg)
-            return new_messages
         elif self.support_tool_call:
             new_messages = []
             last_role = None
             for msg in messages:
                 if (msg['role'] == 'assistant') and last_role != 'user':
+                    if msg.get('tool_calls') is not None:
+                        msg['tool_calls'] = [format_tool_call(tc) for tc in msg['tool_calls']]
                     new_messages.extend([dict(role='user', content=''), msg])
                 else:
                     new_messages.append(msg)
                 last_role = msg['role']
-            return new_messages
         else:
             new_messages = []
             last_role = None
             for msg in messages:
-                if (msg['role'] == 'assistant') and msg.get('tool_call'):
-                    tool_call = '\n'.join(['<tool_call>\n' + json.dumps(tc) + '\n</tool_call>' for tc in msg['tool_call']])
-                    to_append = dict(role='assistant', content=msg.get('content', '') + tool_call)
+                if (msg['role'] == 'assistant') and msg.get('tool_calls'):
+                    tool_call = '\n'.join(['<tool_call>\n' + format_tool_call(tc) + '\n</tool_call>' for tc in msg['tool_calls']])
+                    content = '' if msg.get('content') is None else msg.get('content')
+                    to_append = dict(role='assistant', content=content + tool_call)
                 elif (msg['role'] == 'tool'):
-                    content = msg.get('content', '')
+                    content = '' if msg.get('content') is None else msg.get('content')
                     content = content if isinstance(content, str) else json.dumps(content)
                     content = '<tool_response>\n' + content + '\n</tool_response>'
                     to_append = dict(role='user', content=content)
@@ -161,8 +191,17 @@ class ChatTemplate:
                 else:
                     new_messages.append(to_append)
                 last_role = to_append['role']
-            return new_messages
-                    
+        if not self.support_system and (new_messages[0]['role'] == 'system'):
+            system = new_messages[0]['content']
+            new_messages = new_messages[1:]
+            if (len(new_messages) > 0) and (new_messages[0]['role'] == 'user'):
+                first_message = new_messages[0]['content']
+                first_message = '<system>\n' + system + '\n</system>\n\n' + first_message
+                new_messages[0]['content'] = first_message
+            else:
+                raise Exception(f'First message after the system message is not a user message.')
+        return new_messages            
+
     def apply_chat_template(self, 
             messages: List[Dict[str, Any]], 
             tools: Optional[List[Dict[str, Any]]] = None, 
@@ -188,10 +227,10 @@ class ChatTemplate:
             add_generation_prompt=add_generation_prompt, 
             continue_final_message=continue_final_message)
         if tool_choice == 'required':
-            prompt += self.tool_start + '{"function": {' + '"name": "'
+            prompt += self.tool_start + '{"name": "'
         elif isinstance(tool_choice, dict):
             tool_name = tool_choice['function']['name']
-            prompt += self.tool_start + '{"function": {' + f'"name": "{tool_name}", arguments": '
+            prompt += self.tool_start + '{' + f'"name": "{tool_name}", arguments": '
         return prompt
 
 
