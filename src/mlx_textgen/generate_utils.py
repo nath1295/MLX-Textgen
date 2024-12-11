@@ -29,8 +29,10 @@ class GenerationOutput(NamedTuple):
     token: Optional[int]
     token_ids: mx.array
     logprobs: mx.array
+    input_tokens: int
     finish_reason: FINISH_REASON
     stop_text: Optional[str] = None
+
 
 def stopping_criteria(
         text: str,
@@ -189,7 +191,6 @@ def generate_step(
         def logit_bias_processor(logits):
             logits[:, indices] += values
             return logits
-        
 
     def sample(logits: mx.array) -> Tuple[mx.array, mx.array]:
         logprobs = logits - mx.logsumexp(logits)
@@ -228,9 +229,6 @@ def generate_step(
         batches = tqdm(batches)
     pp_start = time.perf_counter()
     for b1, b2 in batches:
-        if verbose:
-            batches.set_description(f'Processing prompt ({b2}/{unprocessed_ids.shape[1]})')
-
         if b2 != unprocessed_ids.shape[1]: # proccesing without sampling and yielding next token
             model(unprocessed_ids[:, b1:b2], cache=cache_history.cache)
             mx.eval([c.state for c in cache_history.cache])
@@ -240,6 +238,11 @@ def generate_step(
             y, logprobs = _step(unprocessed_ids[:, b1:b2])
             prompt_ids = mx.concat([prompt_ids, y], axis=1)
             num_gen_tokens += 1
+            mx.async_eval(y)
+
+        if verbose:
+            batches.set_description(f'Processing prompt ({b2}/{unprocessed_ids.shape[1]})')
+
     pp_end = time.perf_counter() - pp_start
     if verbose:
         num_tokens = unprocessed_ids.shape[1] * num_prompts
@@ -247,7 +250,7 @@ def generate_step(
             logger.info(f'Prompt preprocessing time for {num_tokens} tokens: {pp_end:.4}s ({num_tokens/pp_end:.4f} tok/sec)')
         else:
             print(f'Prompt preprocessing time for {num_tokens} tokens: {pp_end:.4}s ({num_tokens/pp_end:.4f} tok/sec)')
-    mx.async_eval(y)
+
 
     # Generating tokens
     while True:
@@ -314,7 +317,7 @@ def stream_generate(
     prompt_ids = [remove_bos_duplicates(token_ids=tokenizer.encode(p), bos_token_id=bos_token_id) for p in prompt]
     prompt_lens = [len(p) for p in prompt_ids]
     max_len = max(prompt_lens)
-    prompt_ids = [[pad_token_id] * (max_len - p[1]) + p [0] for p in zip(prompt_ids, prompt_lens)]
+    prompt_ids = [[pad_token_id] * (max_len - p[1]) + p[0] for p in zip(prompt_ids, prompt_lens)]
     prompt_ids = mx.array(prompt_ids)
 
     # Preparing stop sequences
@@ -389,6 +392,7 @@ def stream_generate(
                         token=go[1][0], 
                         token_ids=go[2][-(go[5] + n +1):], 
                         logprobs=go[3][None], 
+                        input_tokens=go[5],
                         finish_reason=go[4],
                         stop_text=go[6]) for go in gen_outputs]
             yield gen_outputs
@@ -461,7 +465,7 @@ def generate(
     prompt_ids = [remove_bos_duplicates(token_ids=tokenizer.encode(p), bos_token_id=bos_token_id) for p in prompt]
     prompt_lens = [len(p) for p in prompt_ids]
     max_len = max(prompt_lens)
-    prompt_ids = [[pad_token_id] * (max_len - p[1]) + p [0] for p in zip(prompt_ids, prompt_lens)]
+    prompt_ids = [[pad_token_id] * (max_len - p[1]) + p[0] for p in zip(prompt_ids, prompt_lens)]
     prompt_ids = mx.array(prompt_ids)
 
     # Preparing stop sequences
@@ -526,7 +530,9 @@ def generate(
         texts = [t[:-sc.trim_length] if s else t for t, sc, s in zip(texts, stop_conditions, is_stopped)]
         finish_reasons = ['stop' if s else 'length' for s in is_stopped]
         gen_outputs = zip(texts, new_tokens, prompt_ids, logprobs, finish_reasons, prompt_lens, stop_texts)
-        gen_outputs = [GenerationOutput(text=go[0], token=go[1][0], token_ids=go[2][-(go[5] + n + 1):], logprobs=go[3][None], finish_reason=go[4], stop_text=go[6]) for go in gen_outputs]
+        gen_outputs = [GenerationOutput(text=go[0], 
+                token=go[1][0], token_ids=go[2][-(go[5] + n + 1):], logprobs=go[3][None], 
+                input_tokens=go[5], finish_reason=go[4], stop_text=go[6]) for go in gen_outputs]
         return gen_outputs
         
     finally:

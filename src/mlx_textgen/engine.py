@@ -55,13 +55,17 @@ def get_return_dict(
             ) for c in choices]
         else:
             tokens = [len(go.token_ids.tolist()) for go in generation_outputs]
+            prompt_tokens = sum([go.input_tokens for go in generation_outputs])
+            total_tokens = sum(tokens)
             out_dicts = dict(id='cmpl-'+id, 
             object=completion_type, 
             created=created,
             model=model, 
             choices=choices,
             usage=dict(
-                total_tokens=sum(tokens)
+                total_tokens=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=total_tokens-prompt_tokens
             )
         )
         return out_dicts
@@ -95,13 +99,17 @@ def get_return_dict(
         ) for i, go in zip(indices, generation_outputs)]
     elif completion_type == 'chat.completion':
         tokens = [len(go.token_ids.tolist()) for go in generation_outputs]
+        prompt_tokens = sum([go.input_tokens for go in generation_outputs])
+        total_tokens = sum(tokens)
         return dict(
             id='chatcmpl-'+id, 
             object=completion_type, 
             created=created, 
             model=model, 
             usage=dict(
-                total_tokens=sum(tokens)
+                total_tokens=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=total_tokens-prompt_tokens
             ), 
             choices=[
                 dict(
@@ -224,7 +232,7 @@ class ModelEngine:
         self.cache_dir = os.path.join(package_cache_dir, 'prompt_cache')
         for model_config in self.model_configs:
             self._prepare_model(model_config=model_config)
-        self.model_info = [dict(id=m, object='model', created=int(dt.now().timestamp()), owned_by=None, permission=[], root='root') for m in self.models.keys()]
+        self.model_info = [self._get_model_info(k, v) for k, v in self.models.items()]
 
     def _prepare_model(self, model_config: ModelConfig) -> None:
         """Making sure the given model is available locally.
@@ -251,6 +259,21 @@ class ModelEngine:
         mlx_path = make_model_exist(model_id_or_path=model_path, quant=quant, revision=model_config.revision, adapter_path=adapter_path)
         mx.metal.clear_cache()
         self.models[model_name] = model_config
+
+    def _get_model_info(self, key: str, config: ModelConfig) -> Dict[str, Any]:
+        config = dict(
+            id=key, 
+            object='model', 
+            created=int(dt.now().timestamp()), 
+            owned_by=None, 
+            permission=[], 
+            root='root',
+            info=dict(
+                tokenizer_id=config.tokenizer_id_or_path if config.tokenizer_id_or_path else config.model_id_or_path,
+                tokenizer_kwargs=config.tokenizer_config
+            )
+        )
+        return config
 
     def _log(self, msg: str) -> None:
         if self.logger:

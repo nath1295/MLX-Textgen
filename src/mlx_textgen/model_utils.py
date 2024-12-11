@@ -34,7 +34,7 @@ def get_model_name(model_id_or_path: str) -> str:
 
 def make_model_exist(
         model_id_or_path: str,
-        quant: Literal['fp16', 'q8', 'q4', 'q2'] = 'fp16',
+        quant: Literal['fp16', 'q8', 'q6', 'q4', 'q3', 'q2'] = 'fp16',
         revision: Optional[str] = None,
         adapter_path: Optional[str] = None
     ) -> Path:
@@ -42,7 +42,7 @@ def make_model_exist(
 
     Args:
         model_id_or_path (str): HuggingFace repository name or the local path of the model.
-        quant (Literal[&#39;fp16&#39;, &#39;q8&#39;, &#39;q4&#39;, &#39;q2&#39;], optional): Quantisation of the model. Defaults to 'fp16'.
+        quant (Literal['fp16', 'q8', 'q6', 'q4', 'q3', 'q2'], optional): Quantisation of the model. Defaults to 'fp16'.
         revision (Optional[str], optional): Revision of the repository if a HuggingFace repository name is given. Defaults to None.
         adapter_path (Optional[str], optional): Check the existence of the adapter file if given. Defaults to None.
 
@@ -82,7 +82,7 @@ def make_model_exist(
 def get_model_and_tokenizer(
         model_id_or_path: str,
         tokenizer_id_or_path: Optional[str] = None,
-        quant: Literal['fp16', 'q8', 'q4', 'q2'] = 'fp16',
+        quant: Literal['fp16', 'q8', 'q6', 'q4', 'q3', 'q2'] = 'fp16',
         revision: Optional[str] = None,
         adapter_path: Optional[str] = None,
         model_config: Optional[Dict[str, Any]] = None,
@@ -94,7 +94,7 @@ def get_model_and_tokenizer(
     Args:
         model_id_or_path (str): HuggingFace repository name or the local path of the model.
         tokenizer_id_or_path (Optional[str], optional): HuggingFace repository name or the local path of the model. If None is given, `model_id_or_path` will be used. Defaults to None.
-        quant (Literal[&#39;fp16&#39;, &#39;q8&#39;, &#39;q4&#39;, &#39;q2&#39;], optional): Quantisation of the model. Defaults to 'fp16'.
+        quant (Literal['fp16', 'q8', 'q6', 'q4', 'q3', 'q2'], optional): Quantisation of the model. Defaults to 'fp16'.
         revision (Optional[str], optional): Revision of the repository if a HuggingFace repository name is given. Defaults to None.
         adapter_path (Optional[str], optional): The adapter file for the model. Defaults to None.
         model_config (Optional[Dict[str, Any]], optional): Extra arguments for loading the model. Defaults to None.
@@ -108,13 +108,15 @@ def get_model_and_tokenizer(
     model_config = {} if model_config is None else model_config
     model = load_model(model_path=mlx_path, model_config=model_config)
     tokenizer = load_tokenizer(model_path=mlx_path if tokenizer_id_or_path is None else Path(tokenizer_id_or_path), tokenizer_config_extra=tokenizer_config, logger=logger)
+    if isinstance(model, tuple):
+        model = model[0]
     return model, tokenizer
 
 class ModelConfig(NamedTuple):
     model_id_or_path: str
     tokenizer_id_or_path: Optional[str] = None
     adapter_path: Optional[str] = None
-    quant: Literal['fp16', 'q8', 'q4', 'q2'] = 'fp16'
+    quant: Literal['fp16', 'q8', 'q6', 'q4', 'q3', 'q2'] = 'fp16'
     revision: Optional[str] = None
     model_name: Optional[str] = None
     model_config: Optional[Dict[str, Any]] = None
